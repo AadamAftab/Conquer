@@ -58,13 +58,13 @@ export const PP = {
   /** practice core: "lance" (Practice, best real 4.75) or "econ" (Econ core) */
   core: "econ" as "lance" | "econ",
   /** econ core preferred fight distances (laser / gun-only / lightning) */
-  econLaser: 145,
+  econLaser: 175,
   econGun: 70,
   econLight: 28,
   /** econ gun lead: "ttun" (linear with track age) or "ours" (strafe model from the firing tick) */
   econAim: "ttun" as "ttun" | "ours",
   /** econ: back off from drones shooting us when badly hurt */
-  econDroneBack: true,
+  econDroneBack: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
