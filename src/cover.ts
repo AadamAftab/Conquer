@@ -88,3 +88,48 @@ export function planPeek(
   }
   return { hide: hide ? [hide.x, hide.y] : null, peek: peek ? [peek.x, peek.y] : null, hiddenNow, shotNow, t, tid: target.id }
 }
+
+/**
+ * Viewshed of one observer: which nav nodes a standing mech could be seen on (chest height), by
+ * casting rays from the observer's eye and keeping the steepest obstacle so far. ~0.4 ms for 360
+ * rays out to 220 m. `seen(n)` is valid until the next compute().
+ */
+export class Viewshed {
+  m: GameMap
+  stamp: Uint32Array
+  gen = 0
+  ex = 0
+  ey = 0
+  ez = 0
+  t = -99
+  constructor(m: GameMap) {
+    this.m = m
+    this.stamp = new Uint32Array(m.NW * m.NH)
+  }
+  compute(ex: number, ey: number, ez: number, t: number, rays = 360, maxR = 220) {
+    const m = this.m, s = m.step, nx = m.nx, ny = m.ny
+    this.gen++
+    this.ex = ex
+    this.ey = ey
+    this.ez = ez
+    this.t = t
+    const gen = this.gen, st = this.stamp, nSurf = m.nSurf
+    for (let k = 0; k < rays; k++) {
+      const a = (k / rays) * Math.PI * 2
+      const ca = Math.cos(a), sa = Math.sin(a)
+      let smax = -Infinity
+      for (let r = 2; r <= maxR; r += 2) {
+        const px = ex + ca * r, py = ey + sa * r
+        const i = Math.floor((px - m.minX) / s), j = Math.floor((py - m.minY) / s)
+        if (i < 0 || j < 0 || i >= nx || j >= ny) break
+        const n = m.nodeOf(px, py)
+        if (n >= 0 && (nSurf[n] + 6 - ez) / r > smax) st[n] = gen
+        const o = (m.topAt(j * nx + i) - ez) / r
+        if (o > smax) smax = o
+      }
+    }
+  }
+  seen(n: number) {
+    return n >= 0 && this.stamp[n] === this.gen
+  }
+}

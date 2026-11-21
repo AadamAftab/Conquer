@@ -3,7 +3,7 @@ import { GameMap } from "./map.ts"
 import { Navigator } from "./nav.ts"
 import { World, type Track } from "./world.ts"
 import { aimAt, centerOffset, clampPitch, hitProb, hitRadius, leadAim, missDist, predict2, shellLanding, type Aim } from "./combat.ts"
-import { planPeek, type PeekPlan } from "./cover.ts"
+import { planPeek, Viewshed, type PeekPlan } from "./cover.ts"
 import { assess, RP, type Risk } from "./risk.ts"
 import { angDiff, rng, type V2, type V3 } from "./geom.ts"
 
@@ -43,6 +43,14 @@ export class Brain {
   state = "init"
   slowTicks = 0
   evadeUntil = -1
+  // ninja: live viewsheds of the most dangerous known enemies
+  vsPool: Viewshed[] = []
+  vsIds: number[] = []
+  vsActive = 0
+  holdT = -99
+  camping = false
+  hasLightning = false
+  meObs: SelfObs | null = null
   cover: V2 | null = null
   coverT = -99
   risk: Risk | null = null
@@ -96,7 +104,7 @@ export class Brain {
       const s0 = m.snap(r() * 600 - 300, r() * 400 - 200, rq, -1, 20)
       if (s0 < 0) continue
       const x = m.nodeX(s0), y = m.nodeY(s0)
-      const tr: Track = { id: 5, kind: "mech", pos: [x + 80 * Math.cos(k), y + 80 * Math.sin(k), m.surfAt(x, y)], vel: [5, -3, 0], aim: [1, 0], hp: 1000, maxHp: 1400, cubes: 1, weapons: ["gun", "laser"], charging: false, seenT: 0, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [[0, 5, -3], [0.1, 5, -3], [0.2, -5, 3], [0.3, -5, 3], [0.4, 5, -3]] }
+      const tr: Track = { id: 5, kind: "mech", pos: [x + 80 * Math.cos(k), y + 80 * Math.sin(k), m.surfAt(x, y)], vel: [5, -3, 0], aim: [1, 0], hp: 1000, maxHp: 1400, cubes: 1, weapons: ["gun", "laser"], charging: false, seenT: 0, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [[0, 5, -3], [0.1, 5, -3], [0.2, -5, 3], [0.3, -5, 3], [0.4, 5, -3]], hurtByOtherT: -99 }
       fakeMe.pos = [x, y, m.surfAt(x, y)]
       const p = planPeek(m, x, y, rq, comp, comp[s0], [tr], tr, 1, this.perCube, 0, () => true)
       if (p.hide) n++
@@ -199,6 +207,10 @@ export class Brain {
     }
     const zoneNow = w.zoneMargin(x, y, t)
     const zoneSoon = w.zoneMargin(x, y, t + 10)
+    this.meObs = me
+    this.hasLightning = iLight >= 0
+    this.updateViewsheds(t, x, y)
+    this.nav.costFn = this.vsActive > 0 ? (n: number) => 3 * this.exposedAt(n) + (0.3 * m.openFar[n]) / 255 : null
     const zGoal = this.zoneGoal(obs, x, y, rq)
     const rotate = this.needRotate(obs, x, y, t)
     const dodge = this.mortarDodge(obs, x, y)
@@ -431,6 +443,7 @@ export class Brain {
     act.aim = [round3(yaw), round3(pitch)]
     act.fire = fire
 
+    this.camping = this.state === "hold" && this.holdGoal !== null && Math.hypot(this.holdGoal[0] - x, this.holdGoal[1] - y) < 5
     // ---------- debug ----------
     const ms = performance.now() - T0
     if (ms > 25) this.slowTicks++
@@ -459,6 +472,12 @@ export class Brain {
     // easy prey (a kill is a placement point)
     if (e.hp / Math.max(1, e.maxHp) < 0.35 && d < 130) return true
     if (this.w.mode === "ffa" && Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > 2.2 && d < 90) return true
+    // camping in the nest: pick off favourable targets only, when the trade is clearly ours
+    if (this.camping && this.meObs && d < 200) {
+      const backTurned = Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > 2
+      const fav = e.hp / Math.max(1, e.maxHp) < 0.5 || Math.abs(e.vel[2]) > 1.5 || (t - e.laserT < 1.3 && !e.charging) || t - e.hurtByOtherT < 3 || backTurned
+      if (fav && assess(this.m, this.w, this.meObs, x, y, e, this.hello.config, this.perCube).adv > RP.campAdv) return true
+    }
     return false
   }
 
@@ -637,7 +656,7 @@ export class Brain {
     if (tr) return tr.seenT === this.w.t ? tr : null
     const c = this.w.crates.get(id)
     if (!c) return null
-    return { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: this.w.t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [] }
+    return { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: this.w.t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [], hurtByOtherT: -99 }
   }
 
   /** Should we take a weapon of this kind? (and which slot to drop) */
@@ -667,48 +686,88 @@ export class Brain {
     return t > z.shrink_start - travel - 10
   }
 
-  /** A point inside the next circle to hold; recomputed when the zone plan changes. */
+  /** Keep live viewsheds for the (up to) 3 most dangerous known mechs. */
+  private updateViewsheds(t: number, x: number, y: number) {
+    const w = this.w
+    const cand: Track[] = []
+    for (const e of w.tracks.values()) if (e.kind === "mech" && t - e.seenT < 4 && Math.hypot(e.pos[0] - x, e.pos[1] - y) < 260) cand.push(e)
+    const danger = (e: Track) => Math.hypot(e.pos[0] - x, e.pos[1] - y) - (t - e.hitUsT < 6 ? 200 : 0) - (e.weapons.includes("laser") ? 40 : 0)
+    cand.sort((a, b) => danger(a) - danger(b))
+    let recomputed = 0
+    this.vsActive = Math.min(3, cand.length)
+    for (let i = 0; i < this.vsActive; i++) {
+      const e = cand[i]
+      const vs = (this.vsPool[i] ??= new Viewshed(this.m))
+      const ez = e.pos[2] + 8 * (1 + this.perCube * e.cubes) + (e.weapons.includes("laser") ? 2 : 0)
+      const stale = this.vsIds[i] !== e.id || Math.hypot(vs.ex - e.pos[0], vs.ey - e.pos[1]) > 4 || Math.abs(vs.ez - ez) > 2 || t - vs.t > 0.6
+      if (stale && recomputed < 2) {
+        vs.compute(e.pos[0], e.pos[1], ez, t)
+        this.vsIds[i] = e.id
+        recomputed++
+      }
+    }
+  }
+
+  /** How many tracked enemies would see a mech standing on nav node n. */
+  exposedAt(n: number): number {
+    let c = 0
+    for (let i = 0; i < this.vsActive; i++) if (this.vsPool[i].seen(n)) c++
+    return c
+  }
+
+  /**
+   * Our nest inside the next circle: a reachable spot few observers can see from afar (openness
+   * map), out of the live viewsheds, close to us. Recomputed when the zone plan changes or when a
+   * known enemy can see the current one (we have been found).
+   */
   private zoneGoal(obs: Observation, x: number, y: number, rq: number): V2 {
     const z = obs.zone
+    const t = obs.t
     const key = `${z.next_center[0]},${z.next_center[1]},${z.next_radius}`
-    if (this.holdKey === key && this.holdGoal) return this.holdGoal
+    const m = this.m
+    const holdNode = this.holdGoal ? m.nodeOf(this.holdGoal[0], this.holdGoal[1]) : -1
+    const spotted = this.holdGoal !== null && this.exposedAt(holdNode) > 0 && t - this.holdT > 4
+    if (this.holdKey === key && this.holdGoal && !spotted) return this.holdGoal
     const [cx, cy] = z.next_center
     const R = z.next_radius
-    const want = R <= 0 ? 0 : R <= 25 ? R * 0.2 : R <= RP.lateRadius ? R * 0.35 : R < 45 ? R * 0.3 : R * 0.55
+    const late = R <= RP.lateRadius
+    const want = R <= 0 ? 0 : R <= 25 ? R * 0.2 : late ? R * 0.35 : R < 45 ? R * 0.3 : R * 0.55
     const d = Math.hypot(x - cx, y - cy)
     let gx = x, gy = y
     if (d > want) {
       gx = cx + ((x - cx) / d) * want
       gy = cy + ((y - cy) / d) * want
     }
-    const m = this.m
     const comp = m.comp(rq)
-    const s = m.snap(x, y, rq, -1, 6)
-    const myComp = s >= 0 ? comp[s] : -1
-    const n = m.snap(gx, gy, rq, myComp, 60)
-    if (n >= 0) (gx = m.nodeX(n)), (gy = m.nodeY(n))
-    // prefer a spot hugging a wall nearby (fewer angles to be shot from)
-    if (R >= 45 && R > RP.lateRadius) {
-      let bs = Infinity
-      let bx = gx, by = gy
-      for (let k = 0; k < 24; k++) {
-        const a = (k / 24) * Math.PI * 2
-        for (const r of [0, 8, 16, 26, 38]) {
-          if (r === 0 && k > 0) continue
-          const px = gx + Math.cos(a) * r, py = gy + Math.sin(a) * r
-          const q = m.nodeOf(px, py)
-          if (!m.passable(q, rq) || (myComp >= 0 && comp[q] !== myComp)) continue
-          if (Math.hypot(px - cx, py - cy) > R * 0.7) continue
-          const cl = m.nClear[q]
-          const sc = r * 0.15 + (cl > rq + 2.5 ? 6 : 0) + Math.abs(cl - (rq + 1)) * 0.8
-          if (sc < bs) (bs = sc), (bx = m.nodeX(q)), (by = m.nodeY(q))
-        }
+    const s0 = m.snap(x, y, rq, -1, 6)
+    const myComp = s0 >= 0 ? comp[s0] : -1
+    const n0 = m.snap(gx, gy, rq, myComp, 60)
+    if (n0 >= 0) (gx = m.nodeX(n0)), (gy = m.nodeY(n0))
+    // late: stay within a few meters of the final area; earlier: anywhere comfortably inside
+    const limit = late ? Math.max(5, want + 5) : R * 0.7
+    const rings = late ? [0, 3, 6, 10] : [0, 6, 12, 20, 30, 42, 56]
+    let best = Infinity
+    let bx = gx, by = gy
+    for (let k = 0; k < 24; k++) {
+      const a = (k / 24) * Math.PI * 2
+      for (const r of rings) {
+        if (r === 0 && k > 0) continue
+        const px = gx + Math.cos(a) * r, py = gy + Math.sin(a) * r
+        const q = m.nodeOf(px, py)
+        if (!m.passable(q, rq) || (myComp >= 0 && comp[q] !== myComp)) continue
+        if (Math.hypot(px - cx, py - cy) > limit) continue
+        const far = m.openFar[q] / 255, near = m.openNear[q] / 255
+        let cost = 3 * far + (this.hasLightning ? -0.5 : 0.3) * near
+        cost += 0.012 * Math.hypot(px - x, py - y) + 0.02 * r
+        cost += 2.5 * this.exposedAt(q)
+        if (m.nClear[q] > rq + 3) cost += 0.3
+        if (late) cost += 0.08 * Math.hypot(px - cx, py - cy)
+        if (cost < best) (best = cost), (bx = m.nodeX(q)), (by = m.nodeY(q))
       }
-      gx = bx
-      gy = by
     }
-    this.holdGoal = [gx, gy]
+    this.holdGoal = [bx, by]
     this.holdKey = key
+    this.holdT = t
     return this.holdGoal
   }
 
@@ -906,6 +965,15 @@ export class Brain {
       const my = Math.atan2(mv[1], mv[0])
       this.scanYaw = my
       return [my + Math.sin(t * 1.3) * 1.1, 0]
+    }
+    // holding: watch the open sectors of our spot (where enemies can come from or be shot)
+    const q = this.m.nodeOf(x, y)
+    const mask = q >= 0 ? this.m.openMask[q] : 0
+    if (mask) {
+      const secs: number[] = []
+      for (let k = 0; k < 16; k++) if (mask & (1 << k)) secs.push((k / 16) * Math.PI * 2)
+      const i = Math.floor(t / 1.2) % secs.length
+      return [secs[i], 0]
     }
     this.scanYaw += 0.3
     return [this.scanYaw, 0]

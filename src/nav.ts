@@ -28,6 +28,7 @@ export class Pathfinder {
   bestNode = -1
   bestH = Infinity
   costFn: ((n: number) => number) | null = null
+  hw = 1
 
   constructor(m: GameMap) {
     this.m = m
@@ -44,7 +45,7 @@ export class Pathfinder {
     const NW = this.m.NW
     const dx = Math.abs((n % NW) - (this.goal % NW))
     const dy = Math.abs(Math.floor(n / NW) - Math.floor(this.goal / NW))
-    return dx > dy ? dx + (SQ2 - 1) * dy : dy + (SQ2 - 1) * dx
+    return (dx > dy ? dx + (SQ2 - 1) * dy : dy + (SQ2 - 1) * dx) * this.hw
   }
 
   private push(n: number, f: number) {
@@ -215,7 +216,7 @@ export class Navigator {
     }
     if (dGoal < 2.5) return { dir: [0, 0], jump, boost, arrived: true }
     // direct line?
-    if (dGoal < 60 && m.walkLine(x, y, gx, gy, rq)) {
+    if (dGoal < (this.costFn ? 15 : 60) && m.walkLine(x, y, gx, gy, rq)) {
       this.path = []
       const d = [(gx - x) / dGoal, (gy - y) / dGoal] as [number, number]
       return this.applyStuck(d, t, jump, boost)
@@ -288,6 +289,7 @@ export class Navigator {
     if (g < 0) return
     this.pending = [gx, gy]
     this.pf.costFn = this.costFn
+    this.pf.hw = this.costFn ? 1.5 : 1
     this.pf.begin(s, g, rq)
     this.pf.run(budget)
     if (this.pf.state === "done") this.adopt()

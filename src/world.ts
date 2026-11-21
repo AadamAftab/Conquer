@@ -24,6 +24,8 @@ export type Track = {
   laserT: number
   /** recent horizontal velocities (t, vx, vy), newest last, ~2 s */
   hist: [number, number, number][]
+  /** last time its HP dropped while we had not hit it (it is fighting someone else) */
+  hurtByOtherT: number
 }
 
 export type Pickup = { id: number; kind: WeaponKind; pos: V3; seenT: number }
@@ -62,13 +64,17 @@ export class World {
     for (const a of obs.mechs) {
       let tr = this.tracks.get(a.id)
       if (!tr) {
-        tr = { id: a.id, kind: a.kind, pos: a.pos, vel: a.vel, aim: a.aim, hp: a.hp ?? 1, maxHp: a.max_hp ?? 1, cubes: a.cubes ?? 0, weapons: a.weapons ?? [], charging: !!a.charging, seenT: t, firstT: t, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [] }
+        tr = { id: a.id, kind: a.kind, pos: a.pos, vel: a.vel, aim: a.aim, hp: a.hp ?? 1, maxHp: a.max_hp ?? 1, cubes: a.cubes ?? 0, weapons: a.weapons ?? [], charging: !!a.charging, seenT: t, firstT: t, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [], hurtByOtherT: -99 }
         this.tracks.set(a.id, tr)
       }
       tr.pos = a.pos
       tr.vel = a.vel
       tr.aim = a.aim
-      if (a.hp !== undefined) tr.hp = a.hp
+      if (a.hp !== undefined) {
+        const weHit = obs.events.some((ev) => ev.type === "hit" && ev.target === a.id)
+        if (a.hp < tr.hp - 1 && !weHit && t - tr.hitByUsT > 0.6) tr.hurtByOtherT = t
+        tr.hp = a.hp
+      }
       if (a.max_hp !== undefined) tr.maxHp = a.max_hp
       tr.cubes = a.cubes ?? tr.cubes
       if (a.weapons) tr.weapons = a.weapons

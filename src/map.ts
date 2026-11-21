@@ -36,6 +36,11 @@ export class GameMap {
   NH: number
   nClear: Float32Array
   nSurf: Float32Array
+  /** per nav node, how exposed a standing mech is (0..255): to ground observers >= 45 m / < 45 m */
+  openFar: Uint8Array
+  openNear: Uint8Array
+  /** per nav node: bit k set when sector k (of 16) has long open sightlines */
+  openMask: Uint16Array
   private comps = new Map<number, Int32Array>()
 
   constructor(dir: string, stepUp = 1.2) {
@@ -97,6 +102,64 @@ export class GameMap {
         }
         this.nClear[J * NW + I] = cl
         this.nSurf[J * NW + I] = sf
+      }
+    this.openFar = new Uint8Array(NW * NH)
+    this.openNear = new Uint8Array(NW * NH)
+    this.openMask = new Uint16Array(NW * NH)
+    this.computeOpenness()
+  }
+
+  /** Height of the tallest thing in a cell (terrain or solid). */
+  topAt(c: number): number {
+    const g = this.gnd[c], h = this.solHi[c]
+    return h > g ? h : g
+  }
+
+  /**
+   * Openness on a 4 m lattice: from the top of a mech standing on the node, cast 16 horizon rays
+   * and count the ground observers (eye 8 m) that would see it, near (< 45 m) and far (45-160 m).
+   */
+  private computeOpenness() {
+    const NW = this.NW, NH = this.NH, s = this.step
+    const RAYS = 16, MAXR = 160
+    const cs: number[] = [], sn: number[] = []
+    for (let k = 0; k < RAYS; k++) (cs[k] = Math.cos((k / RAYS) * Math.PI * 2)), (sn[k] = Math.sin((k / RAYS) * Math.PI * 2))
+    const nx = this.nx, ny = this.ny, gnd = this.gnd, wall = this.wall
+    for (let J = 0; J < NH; J += 2)
+      for (let I = 0; I < NW; I += 2) {
+        const n = J * NW + I
+        if (this.nClear[n] < 2.9) continue
+        const x = this.nodeX(n), y = this.nodeY(n), zt = this.nSurf[n] + 9
+        let fv = 0, ft = 0, nv = 0, nt = 0, mask = 0
+        for (let k = 0; k < RAYS; k++) {
+          let smax = -Infinity, rv = 0, rt = 0
+          for (let r = 2; r <= MAXR; r += 2) {
+            const i = Math.floor((x + cs[k] * r - this.minX) / s), j = Math.floor((y + sn[k] * r - this.minY) / s)
+            if (i < 0 || j < 0 || i >= nx || j >= ny) break
+            const c = j * nx + i
+            if (!wall[c]) {
+              const vis = (gnd[c] + 8 - zt) / r > smax
+              if (r < 45) (nt++, vis && nv++)
+              else (rt++, vis && rv++)
+            }
+            const o = (this.topAt(c) - zt) / r
+            if (o > smax) smax = o
+          }
+          ft += rt
+          fv += rv
+          if (rt > 0 && rv / rt > 0.3) mask |= 1 << k
+        }
+        const of = ft ? Math.round((255 * fv) / ft) : 0, on = nt ? Math.round((255 * nv) / nt) : 0
+        // fill the 2x2 block of nav nodes this lattice point stands for
+        for (let dj = 0; dj < 2; dj++)
+          for (let di = 0; di < 2; di++) {
+            const I2 = I + di, J2 = J + dj
+            if (I2 >= NW || J2 >= NH) continue
+            const q = J2 * NW + I2
+            this.openFar[q] = of
+            this.openNear[q] = on
+            this.openMask[q] = mask
+          }
       }
   }
 

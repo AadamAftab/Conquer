@@ -30,6 +30,8 @@ export const RP = {
   lateRadius: 70,
   /** after a kill, heal up to this fraction before taking the next fight */
   healAfterKill: 0.9,
+  /** camping: minimum trade advantage to open fire on a favourable target */
+  campAdv: 1.5,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
