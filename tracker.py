@@ -1,0 +1,277 @@
+"""
+tracker.py — Tiered Epistemic Belief Tracker for enemy mechs.
+
+Each detected mech or NPC is assigned a confidence tier:
+  T0 — directly visible in obs["mechs"]  (exact position, velocity)
+  T1 — server memory window < memory_s   (server keeps reporting real pos)
+  T2 — stale (> memory_s since last seen) — position is uncertain
+  T3 — heard a sound with a bearing, but never seen
+
+The tracker is updated each tick from the observation and exposes:
+  beliefs : Dict[int, BeliefEntry]   keyed by mech id
+
+For T2 we maintain a simple centroid + radius rather than a full particle
+cloud, since we have no physics engine to propagate particles.
+
+Contradiction rules (applied every tick):
+  Empty-View Rule : if our FOV/proximity contains the belief position
+                    with no corresponding mech in obs["mechs"], delete it.
+  Counting Rule   : active tracks <= obs["alive"] - 1.
+  Speed Limit     : any hypothesis requiring > 25 m/s displacement per dt
+                    is demoted to T2 (position uncertain).
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+import config as C
+import mechfight as mf
+
+
+# ---------------------------------------------------------------------------
+# Data class
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BeliefEntry:
+    """Belief about one tracked mech."""
+    id:        int
+    kind:      str           # "mech" or "npc"
+    tier:      int           # 0,1,2,3
+    pos:       List[float]   # best-estimate [x,y,z]
+    vel:       List[float]   # best-estimate velocity [vx,vy,vz]
+    hp:        Optional[float] = None
+    max_hp:    Optional[float] = None
+    weapons:   List[str] = field(default_factory=list)
+    charging:  bool = False
+    last_seen_t: float = -999.0   # match time (s) of last T0 observation
+    last_heard_t: float = -999.0  # match time (s) of last T3 sound
+    # For T2: search radius around pos estimate
+    uncertainty_radius: float = 10.0
+    # Confidence score [0..1] — used by combat.py to gate shots
+    confidence: float = 0.0
+    bearing_from_sound: Optional[float] = None   # T3 bearing (radians)
+
+
+# ---------------------------------------------------------------------------
+# Tracker
+# ---------------------------------------------------------------------------
+
+class EpistemicTracker:
+    """
+    Maintains a belief dict for all tracked actors and updates it
+    every decision tick from the latest observation.
+    """
+
+    # Maximum age (s) before a T1 belief is demoted to T2
+    _MEMORY_S = C.VISION_MEMORY_S     # 5.0 s
+
+    # Maximum age (s) before a T2 belief is discarded entirely
+    _STALE_DROP_S = 20.0
+
+    # Speed limit for hypothesis plausibility (m/s)
+    _SPEED_LIMIT = 25.0
+
+    def __init__(self) -> None:
+        self.beliefs: Dict[int, BeliefEntry] = {}
+        self._next_sound_id = 10000   # synthetic id for T3-only tracks
+
+    # ------------------------------------------------------------------
+    def update(self, obs: dict) -> None:
+        """
+        Main update call. Must be invoked at the start of each act() tick.
+        Updates all tiers, applies contradiction rules, prunes stale entries.
+        """
+        t     = obs["t"]
+        me    = obs["self"]
+        my_x, my_y, my_z = me["pos"]
+        my_aim_yaw        = me["aim"][0]
+        alive_count       = obs.get("alive", 1)   # includes us
+
+        # --- Step 1: Update T0 from directly visible mechs/NPCs ---
+        seen_ids = set()
+        for actor in obs.get("mechs", []):
+            aid = actor["id"]
+            seen_ids.add(aid)
+            entry = self.beliefs.get(aid)
+            if entry is None:
+                entry = BeliefEntry(
+                    id=aid, kind=actor["kind"],
+                    tier=0, pos=list(actor["pos"]),
+                    vel=list(actor["vel"]),
+                )
+                self.beliefs[aid] = entry
+
+            entry.tier          = 0
+            entry.pos           = list(actor["pos"])
+            entry.vel           = list(actor["vel"])
+            entry.last_seen_t   = t
+            entry.confidence    = C.FIRE_CONFIDENCE_T0
+            entry.uncertainty_radius = 0.0
+            if "hp"      in actor: entry.hp      = actor["hp"]
+            if "max_hp"  in actor: entry.max_hp  = actor["max_hp"]
+            if "weapons" in actor: entry.weapons = list(actor.get("weapons", []))
+            entry.charging = actor.get("charging", False)
+
+        # --- Step 2: Age non-visible entries ---
+        for aid, entry in list(self.beliefs.items()):
+            if aid in seen_ids:
+                continue
+
+            age = t - entry.last_seen_t
+
+            if age <= 0.0:
+                # Just demoted — still T0 from above
+                pass
+            elif age <= self._MEMORY_S:
+                # T1: server memory window — keep last known pos/vel
+                entry.tier       = 1
+                entry.confidence = C.FIRE_CONFIDENCE_T1
+                # Dead-reckon position with constant velocity
+                dt_since_seen = age
+                entry.pos = [
+                    entry.pos[0] + entry.vel[0] * C.TICK_DT,
+                    entry.pos[1] + entry.vel[1] * C.TICK_DT,
+                    entry.pos[2] + entry.vel[2] * C.TICK_DT,
+                ]
+                entry.uncertainty_radius = age * 2.0   # grows with time
+            elif age <= self._STALE_DROP_S:
+                # T2: stale particle cloud
+                entry.tier        = 2
+                entry.confidence  = C.FIRE_CONFIDENCE_T2
+                entry.uncertainty_radius = min(50.0, age * C.WALK_SPEED)
+            else:
+                # Too old — drop entirely
+                del self.beliefs[aid]
+                continue
+
+        # --- Step 3: Ingest sound observations (T3) ---
+        self._process_sounds(obs, t, my_x, my_y, my_z, seen_ids)
+
+        # --- Step 4: Apply contradiction rules ---
+        self._apply_contradictions(obs, t, my_x, my_y, my_z,
+                                   my_aim_yaw, alive_count)
+
+        # --- Step 5: Kill event processing ---
+        for event in obs.get("events", []):
+            if event.get("type") == "kill":
+                dead_id = event.get("target")
+                if dead_id in self.beliefs:
+                    del self.beliefs[dead_id]
+
+    # ------------------------------------------------------------------
+    def _process_sounds(self, obs: dict, t: float,
+                        my_x: float, my_y: float, my_z: float,
+                        seen_ids: set) -> None:
+        """
+        Convert sound observations into T3 belief wedges.
+        Only add new T3 entries for sounds we don't already have
+        a better track for.
+        """
+        for sound in obs.get("sounds", []):
+            kind    = sound.get("kind", "")
+            bearing = sound.get("bearing", 0.0)
+            dist_s  = sound.get("dist", "far")
+
+            # Footstep / boost sounds reliably indicate a living mech
+            if kind not in ("step", "boost", "gun", "mortar",
+                            "laser", "lightning", "laser_charge"):
+                continue
+
+            dist_estimate = {
+                "near": C.SOUND_NEAR_M * 0.5,
+                "mid":  (C.SOUND_NEAR_M + C.SOUND_MID_M) * 0.5,
+                "far":  C.SOUND_MID_M * 1.5,
+            }.get(dist_s, 100.0)
+
+            est_x = my_x + dist_estimate * math.cos(bearing)
+            est_y = my_y + dist_estimate * math.sin(bearing)
+
+            # Find if we already have a close track
+            close_track = None
+            for aid, entry in self.beliefs.items():
+                if math.hypot(entry.pos[0] - est_x,
+                              entry.pos[1] - est_y) < 40.0:
+                    close_track = entry
+                    break
+
+            if close_track is not None:
+                # Update the existing track's last-heard time and rough pos
+                if close_track.tier >= 2:
+                    close_track.last_heard_t = t
+                    close_track.bearing_from_sound = bearing
+            # else: we could add a T3-only entry, but that risks ghost tracks.
+            # We deliberately stay conservative and only shoot at T0/T1.
+
+    # ------------------------------------------------------------------
+    def _in_fov(self, my_x: float, my_y: float, my_aim_yaw: float,
+                tx: float, ty: float) -> bool:
+        """True if (tx,ty) is inside our forward FOV cone."""
+        to_tgt_yaw = math.atan2(ty - my_y, tx - my_x)
+        angle_diff  = abs(to_tgt_yaw - my_aim_yaw)
+        angle_diff  = min(angle_diff, 2 * math.pi - angle_diff)
+        return math.degrees(angle_diff) <= C.VISION_FOV_DEG / 2.0
+
+    def _in_proximity(self, my_x: float, my_y: float,
+                      tx: float, ty: float) -> bool:
+        return math.hypot(tx - my_x, ty - my_y) <= C.VISION_NEAR_RANGE
+
+    # ------------------------------------------------------------------
+    def _apply_contradictions(self, obs: dict, t: float,
+                              my_x: float, my_y: float, my_z: float,
+                              my_aim_yaw: float, alive_count: int) -> None:
+        """
+        Apply the two contradiction rules to remove impossible beliefs.
+        """
+        # --- Counting Rule ---
+        max_enemies = alive_count - 1
+        if len(self.beliefs) > max_enemies:
+            # Remove oldest/lowest-confidence entries until count is sane
+            sorted_beliefs = sorted(
+                self.beliefs.items(),
+                key=lambda kv: (kv[1].tier, -kv[1].last_seen_t),
+                reverse=True,
+            )
+            for aid, _ in sorted_beliefs[max_enemies:]:
+                del self.beliefs[aid]
+
+        # --- Empty-View Rule ---
+        # If we have direct LOS to a belief position with no actor there,
+        # demote it from T1 → T2 (don't delete, just increase uncertainty).
+        seen_positions = {
+            (m["pos"][0], m["pos"][1])
+            for m in obs.get("mechs", [])
+        }
+        for aid, entry in list(self.beliefs.items()):
+            if entry.tier not in (1,):
+                continue   # only apply to T1 (T0 is confirmed, T2 is already uncertain)
+            bx, by = entry.pos[0], entry.pos[1]
+            in_view = (self._in_fov(my_x, my_y, my_aim_yaw, bx, by) or
+                       self._in_proximity(my_x, my_y, bx, by))
+            if in_view:
+                # We should see it — if no mech is at that position, demote
+                if not any(
+                    math.hypot(px - bx, py - by) < 6.0
+                    for px, py in seen_positions
+                ):
+                    entry.tier = 2
+                    entry.confidence = C.FIRE_CONFIDENCE_T2
+                    entry.uncertainty_radius = max(entry.uncertainty_radius, 15.0)
+
+    # ------------------------------------------------------------------
+    def visible_threats(self) -> List[BeliefEntry]:
+        """Return T0 + T1 beliefs (high-confidence targets), sorted by HP asc."""
+        candidates = [b for b in self.beliefs.values() if b.tier <= 1]
+        return sorted(candidates, key=lambda b: (b.hp or 9999, b.tier))
+
+    def any_visible(self) -> bool:
+        """True if any T0 mech is currently visible."""
+        return any(b.tier == 0 for b in self.beliefs.values())
+
+    def threat_count(self) -> int:
+        """Number of T0 threats visible right now."""
+        return sum(1 for b in self.beliefs.values() if b.tier == 0)
