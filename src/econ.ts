@@ -254,6 +254,19 @@ export class Econ {
       }
     }
 
+    // badly hurt and a drone is shooting at us: back off from it instead of looting/roaming
+    if (PP.econDroneBack && !T && hpFrac < 0.4) {
+      const h = w.hurt.filter((e) => e.weapon === "npc" && t - e.t < 2).pop()
+      if (h) {
+        let npc: Track | null = null
+        for (const n of w.liveNpcs()) if (!npc || dTo(n.pos) < dTo(npc.pos)) npc = n
+        const b = npc ? Math.atan2(npc.pos[1] - y, npc.pos[0] - x) : (h.bearing ?? 0)
+        goal = [x - Math.cos(b) * 25, y - Math.sin(b) * 25]
+        stand = false
+        creep = false
+        mode = "drone-back"
+      }
+    }
     // ---------- execute movement ----------
     let mv: V2 = [0, 0]
     let jump = false
