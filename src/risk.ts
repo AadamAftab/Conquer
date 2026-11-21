@@ -15,6 +15,15 @@ export const RP = {
   regenLow: 0.5,
   regenLowMulti: 0.65,
   brawlAdv: 0.9,
+  /** upgrade order override (empty = built-in lists) */
+  upg: [] as string[],
+  /** never drop the gun for a second special weapon */
+  keepGun: false,
+  /** minimum hit probability to pull the gun trigger / release the laser */
+  gunNeed: 0.3,
+  laserNeed: 0.8,
+  /** refuse long laser duels when we hold lightning */
+  doctrine: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -65,7 +74,10 @@ export function assess(m: GameMap, w: World, me: SelfObs, x: number, y: number, 
     const ez = e.pos[2] + 8 * es
     if (!m.los(e.pos[0], e.pos[1], ez, x, y, z + 4.5 * s) && !m.los(e.pos[0], e.pos[1], ez, x, y, z + 8.5 * s)) continue
     exposedTo++
-    let dps = weaponDps(e.weapons.length ? e.weapons : ["gun"], d, e.cubes, cfg)
+    // a laser that just fired is cooling down: it cannot hurt us for the next ~1.5 s
+    const cooling = t - e.laserT < (cfg.weapons.laser.cooldown ?? 1.65) - 0.2 && !e.charging
+    const ws = (e.weapons.length ? e.weapons : ["gun"]).filter((k) => !(cooling && k === "laser"))
+    let dps = weaponDps(ws, d, e.cubes, cfg)
     // shots from outside our front arc hit harder
     if (Math.abs(angDiff(Math.atan2(e.pos[1] - y, e.pos[0] - x), me.aim[0])) > Math.PI / 2) dps *= cfg.mech.rear_mult ?? 1.5
     incoming += dps

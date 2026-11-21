@@ -7,8 +7,8 @@ import { planPeek, type PeekPlan } from "./cover.ts"
 import { assess, RP, type Risk } from "./risk.ts"
 import { angDiff, rng, type V2, type V3 } from "./geom.ts"
 
-const UPG_FFA = ["plating", "armor", "nanites", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "sensors", "gyros", "gun_rate", "servos", "jets", "lightning_range", "reactor", "capacitor", "gun_mag", "gun_velocity", "lightning_chain", "laser_pierce"]
-const UPG_PRACTICE = ["plating", "laser_damage", "nanites", "armor", "laser_charge", "lightning_efficiency", "gun_damage", "gun_rate", "gyros", "sensors", "lightning_range", "servos", "gun_mag", "gun_velocity", "jets", "reactor", "capacitor", "lightning_chain", "laser_pierce"]
+const UPG_FFA = ["gyros", "plating", "armor", "nanites", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "sensors", "gyros", "gun_rate", "servos", "jets", "lightning_range", "reactor", "capacitor", "gun_mag", "gun_velocity", "lightning_chain", "laser_pierce"]
+const UPG_PRACTICE = ["gyros", "plating", "laser_damage", "nanites", "armor", "laser_charge", "lightning_efficiency", "gun_damage", "gun_rate", "gyros", "sensors", "lightning_range", "servos", "gun_mag", "gun_velocity", "jets", "reactor", "capacitor", "lightning_chain", "laser_pierce"]
 const LOUD = new Set(["gun", "laser", "laser_charge", "lightning", "mortar", "explosion", "step", "boost", "jet", "reload"])
 
 type Goal = { pos: V2; kind: "pickup" | "cube" | "farm" | "explore"; id: number }
@@ -91,7 +91,7 @@ export class Brain {
   }
 
   pickUpgrade(obs: Observation): number {
-    const list = this.w.mode === "practice" ? UPG_PRACTICE : UPG_FFA
+    const list = RP.upg.length ? RP.upg : this.w.mode === "practice" ? UPG_PRACTICE : UPG_FFA
     let best = 0, bestR = Infinity
     obs.offer!.choices.forEach((c, i) => {
       let r = list.indexOf(c.id)
@@ -200,7 +200,12 @@ export class Brain {
       if (engage && T) (shootT = T), (gunOk = true), (lightOk = true), (laserMode = "shoot")
     } else if (engage && T) {
       const d = dTo(T.pos)
-      const brawlD = iLight >= 0 && me.energy > 25 ? 38 : 26
+      const lightRange = iLight >= 0 ? (slots[iLight]!.stats.range ?? 45) : 0
+      const brawlD = iLight >= 0 && me.energy > 25 ? lightRange * 0.93 : 26
+      // a laser sniper out of arc range: refuse the long duel, stay out of its sight until it comes
+      // into lightning range (each arc shorts its laser for 2 s) or its laser is cooling down
+      const sniper = T.kind === "mech" && T.weapons.includes("laser") && iLight >= 0 && d > brawlD && !finishing
+      const theirLaserDown = t - T.laserT < 1.4 && !T.charging
       shootT = T
       if (this.regen || evading) {
         // break line of sight from every threat (and heal)
@@ -219,6 +224,23 @@ export class Brain {
         gunOk = regenBlocked
         lightOk = regenBlocked
         laserMode = iLaser < 0 ? "off" : regenBlocked && settled ? "shoot" : this.plan?.hiddenNow ? "charge" : "off"
+      } else if (sniper && !theirLaserDown && RP.doctrine) {
+        this.state = "deny"
+        this.replan(x, y, rq, comp, myComp, enemies, T, scale, t, zoneOk, 0.35)
+        const hide = this.plan?.hide
+        if (hide && !(this.plan!.hiddenNow && Math.hypot(hide[0] - x, hide[1] - y) < 1.5)) {
+          const r = go(hide[0], hide[1])
+          mv = r.dir
+          if (!r.arrived && hitRecently) boost = me.energy > 30
+        } else if (!hide) {
+          // no cover: close the distance hard, zig-zagging, to get it into arc range
+          mv = this.jink(x, y, T, rq, t, 0.6, 0.8)
+          boost = me.energy > 45
+        }
+        const regenBlocked = t - w.lastHurtT < (me.stats.regen_delay ?? 5)
+        gunOk = regenBlocked
+        lightOk = true
+        laserMode = iLaser >= 0 ? (this.plan?.hiddenNow ? "charge" : regenBlocked ? "shoot" : "off") : "off"
       } else if (d < brawlD && (risk.adv > RP.brawlAdv || finishing)) {
         this.state = "brawl"
         mv = this.brawlMove(x, y, T, iLight >= 0 && me.energy > 25, rq, t)
@@ -517,7 +539,7 @@ export class Brain {
           laserBusy = true
           // hitscan: release only when the beam will land (aim after slew + target drift over one tick)
           const p = hitProb(missDist(me, direct, LAT), direct.sigma, radius)
-          const ok = d <= range && los && p > 0.8
+          const ok = d <= range && los && p > RP.laserNeed
           fire[iLaser] = !((charge >= full - 0.02 && ok) || left < 0.2)
         } else if (L.cooldown <= 0.05 && d <= range * 0.97 && los && !this.shortRisk(tr, d)) {
           fire[iLaser] = true
@@ -551,7 +573,7 @@ export class Brain {
       const laserOk = !laserBusy || d < 40
       const spread = (((G.stats.spread_deg ?? 0.6) * Math.PI) / 180) * lead.dist
       const p = hitProb(missDist(me, lead, LAT), Math.hypot(lead.sigma, spread), radius + 0.3)
-      const need = tr.kind === "npc" ? 0.2 : 0.3
+      const need = tr.kind === "npc" ? 0.2 : RP.gunNeed
       const gunLos = m.los(muz[0], muz[1], muz[2], lead.pt[0], lead.pt[1], lead.pt[2])
       if (gunOk && allowed && G.cooldown <= 0 && ammo > 0 && !(G.reload ?? 0) && okRange && laserOk && gunLos && p > need) fire[iGun] = true
       if (ammo === 0 && !(G.reload ?? 0)) reload = true
@@ -602,7 +624,7 @@ export class Brain {
     const mortar = slots.findIndex((s) => s?.kind === "mortar")
     if (mortar >= 0 && !(slots[mortar] as WeaponObs).charge) return { ok: true, drop: mortar }
     const gun = slots.findIndex((s) => s?.kind === "gun")
-    if (gun >= 0 && safe) return { ok: true, drop: gun }
+    if (gun >= 0 && safe && !RP.keepGun) return { ok: true, drop: gun }
     return { ok: false }
   }
 
@@ -698,7 +720,7 @@ export class Brain {
       if (!this.wants(p.kind, slots, nearestD > 80).ok) continue
       const c = m.cellOf(p.pos[0], p.pos[1])
       if (c < 0 || m.wall[c] || Math.abs(p.pos[2] - m.groundAt(p.pos[0], p.pos[1])) > 2.5) continue
-      consider([p.pos[0], p.pos[1]], "pickup", p.id, 0.5, nearestD > 100 ? 260 : 100)
+      consider([p.pos[0], p.pos[1]], "pickup", p.id, p.kind === "lightning" ? 0.35 : 0.55, nearestD > 100 ? 260 : 100)
     }
     for (const c of obs.cubes) {
       if (Math.abs(c.pos[2] - m.surfAt(c.pos[0], c.pos[1])) > 3) continue
