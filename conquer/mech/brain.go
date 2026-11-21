@@ -628,10 +628,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 				near++
 			}
 		}
-		losing := (near >= 2 && hpFrac < 0.55) || (near >= 3 && hpFrac < 0.8)
+		losing := (near >= 2 && hpFrac < 0.55*tweakLoseK) || (near >= 3 && hpFrac < math.Min(0.95, 0.8*tweakLoseK))
 		if target != nil {
 			tf := target.HP / math.Max(1, target.MaxHP)
-			if hpFrac < 0.35 && tf > hpFrac+0.1 {
+			if hpFrac < 0.35*tweakLoseK && tf > hpFrac+0.1 {
 				losing = true
 			}
 			if tf < 0.25 && hpFrac > 0.2 && near <= 2 {
@@ -1090,6 +1090,11 @@ func (b *Brain) step(o *Obs, act *Action) {
 		break
 	}
 
+	if tweakHopT > 0 && now < tweakHopT && (mx != 0 || my != 0) {
+		mx, my = mx*0.5-my*0.85, my*0.5+mx*0.85
+		act.Jump = true
+		boost = true
+	}
 	act.Move = [2]float64{mx, my}
 	act.Boost = boost && (mx != 0 || my != 0)
 	b.Mode = mode
