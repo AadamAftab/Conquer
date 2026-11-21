@@ -179,10 +179,12 @@ NAV_GOAL_MOVE_M: float = 10.0    # restart the search when the goal moves this f
 # 6c. COMBAT MOVEMENT (motion.py)
 # ---------------------------------------------------------------------------
 # Preferred (min, max) distance to the target by the weapon we fight with
-BAND_GUN: tuple       = (45.0, 110.0)
-BAND_LASER: tuple     = (60.0, 140.0)
+# Closer than before: the squad's bots are beaten at close range (lightning 22 m,
+# gun ~40 m, laser ~55 m is what the stronger bots in practice hold).
+BAND_GUN: tuple       = (30.0, 55.0)
+BAND_LASER: tuple     = (45.0, 75.0)
 BAND_MORTAR: tuple    = (70.0, 170.0)
-BAND_LIGHTNING: tuple = (12.0, 35.0)
+BAND_LIGHTNING: tuple = (10.0, 28.0)
 BAND_NPC: tuple       = (20.0, 45.0)
 LIGHTNING_KEEPOUT_M: float = 55.0  # stay out of an enemy's lightning when we don't hold one
 STRAFE_FLIP_MIN_S: float   = 0.35  # strafe direction flips on a random timer in [min, max]
@@ -254,18 +256,59 @@ LASER_ENGAGE_RANGE: float  = 270.0 # m — laser has extra range; prefer laser e
 # shares vision and hunts the weakest. Stay out of fights early: loot, take a
 # drop, rotate. Engage only after this many seconds, when hurt enough to be
 # forced into it, or once combat has already started.
-OPENING_CALM_S: float      = 35.0
+OPENING_CALM_S: float      = 0.0   # 0 = no calm: the active bots in practice fight from t=0
 # Above this many mechs alive we still accept an outnumbered fight as a reason
 # to break off; below it the circle is small and hiding is no longer an option.
 LATE_GAME_ALIVE: int       = 6
-DISENGAGE_HP_FRAC: float   = 0.40  # fraction of max HP — below this (with threats), disengage
-REGEN_RESUME_FRAC: float   = 0.75  # fraction of max HP — above this, re-engage
+
+# RECOVER (hide and heal between waves)
+RECOVER_START_FRAC: float  = 0.55  # nobody in sight and below this → hide and heal
+RECOVER_DONE_FRAC: float   = 0.85  # heal to this before looting / roaming again
+POST_KILL_WINDOW_S: float  = 4.0   # right after a kill...
+POST_KILL_HP_FRAC: float   = 0.75  # ...recover if below this (kept small: idling costs kills)
+RECOVER_MAX_S: float       = 25.0  # give up recovering after this long
+RECOVER_MOVE_SCALE: float  = 0.40  # ~4.7 m/s: under sound.step_speed (5 m/s) → silent
+RECOVER_ZONE_LEAD_S: float = 20.0  # while recovering, head into the next circle this long before it shrinks
+EVADE_MIN_S: float         = 1.5   # minimum time in a retreat state (no flapping)
+# Outnumbered: enemies that HIT us count even when unseen
+ATTACKER_WINDOW_S: float   = 2.0
+OUTNUMBERED_HP_FRAC: float = 0.60  # retreat from a crowd / 2+ attackers only once below this
+PANIC_HP_FRAC: float       = 0.45  # an enemy inside PANIC_RANGE only forces a retreat below this
+# Don't hand the squad a target
+APPROACH_MIN_HP_FRAC: float = 0.50 # walk toward a far enemy only above this HP...
+APPROACH_ALONE_M: float    = 40.0  # ...and only if no other known enemy is this close to it
+APPROACH_BOOST_ENERGY: float = 80.0 # boost while closing in only with plenty of energy (keep dodge fuel)
+FARM_MIN_HP_FRAC: float    = 0.80  # shoot crates / drones only above this (damage dealt stops regen)
+HURT_AIM_S: float          = 1.5   # face a hit's direction this long when nothing is visible
+CALM_AVOID_M: float        = 140.0 # during the opening calm, take cover from a mech this close
+DISENGAGE_HP_FRAC: float   = 0.35  # fraction of max HP — below this (with threats), disengage
+
+# EXPLORING (nothing known, healthy): sweep unvisited cells inside the zone to
+# find weapons, cubes, crates and the enemies we need to kill for points.
+EXPLORE_STEP_M: float      = 70.0
+EXPLORE_UNTIL_S: float     = 240.0
+EXPLORE_HP_FRAC: float     = 0.60
+EXPLORE_REPICK_S: float    = 25.0
+
+# STUCK DETECTION (motion.py): ordered to travel but not moving → break away
+STUCK_WINDOW_S: float      = 1.5   # watch this long...
+STUCK_MIN_MOVE_M: float    = 2.5   # ...and call it stuck if we moved less than this
+ESCAPE_S: float            = 1.0   # random sideways jump-and-boost for this long
+
+# FLEEING an unseen shooter (hit, but nothing in sight to shoot back at)
+FLEE_S: float              = 1.5   # keep running this long after the hit
+FLEE_JUKE_RAD: float       = 0.8   # angle off the straight-away direction (harder to follow)
+FLEE_BOOST_ENERGY: float   = 40.0
+
+# AIMING
+AIM_LATENCY_S: float       = 0.075 # decision + tick delay before a shot actually leaves
+REGEN_RESUME_FRAC: float   = 0.65  # fraction of max HP — above this, re-engage
 GUN_MIN_TOL_DEG: float     = 0.8   # minimum aim tolerance for firing the gun (deg)
 MORTAR_AIM_TOL_DEG: float  = 2.0   # torso must be within this of the lob aim before firing
 PICKUP_RADIUS: float       = 4.0   # loot.pickup_radius (overwritten from hello.config)
 LOS_STEP_M: float          = 3.0   # line-of-sight sampling step (m)
 DEAD_RECKON_MAX_S: float   = 1.0   # stop extrapolating a lost track after this long
-MULTI_ENEMY_THRESHOLD: int = 2     # if >= this many enemies visible, disengage
+MULTI_ENEMY_THRESHOLD: int = 3     # if >= this many enemies visible (and hurt), disengage
 LOS_BREAK_DIST: float      = 8.0   # m — step back this far from roof edge to hide
 
 # ZONE_ROTATION

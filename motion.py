@@ -37,6 +37,12 @@ from world import Rooftop, WorldIndex
 
 Vec2 = Tuple[float, float]
 
+# Movement modes in which we are trying to get somewhere (so "not moving" is a fault)
+_TRAVEL_MODES = frozenset({
+    "explore", "loot", "rotate", "approach", "drop", "zone", "flee", "evade",
+    "disengage", "hold-cover", "recover-rotate", "calm-hide", "to-roof",
+})
+
 
 def _unit(x: float, y: float) -> Vec2:
     d = math.hypot(x, y)
@@ -60,12 +66,71 @@ class MotionController:
         # Remembered loot: key -> {"kind", "pos", "t", "item"}
         self._loot: Dict[Tuple[str, int], dict] = {}
         # Rooftop climb state
+        # Stuck detection: recent positions, and an escape in progress
+        self._pos_hist: list = []
+        self._escape_until: float = -99.0
+        self._escape_dir: float = 0.0
+        # Exploration: 70 m cells already swept, and the current goal
+        self._visited: set = set()
+        self._explore_goal: Optional[Vec2] = None
+        self._explore_t: float = -99.0
+        # Last hit by a shooter we could not see: where it came from, and when
+        self._hurt_bearing: Optional[float] = None
+        self._hurt_t: float = -99.0
+        self._flee_sign: float = 1.0
         self._climb_start_t: Optional[float] = None
         self._mrm_budget: Optional[float] = None
         self.debug_mode: str = ""
 
     # ==================================================================
-    def decide(
+    def decide(self, *args, **kwargs) -> dict:
+        """Movement decision, plus a stuck detector around it (see _unstick)."""
+        obs = args[0] if args else kwargs["obs"]
+        out = self._decide(*args, **kwargs)
+        return self._unstick(obs, out)
+
+    def _unstick(self, obs: dict, out: dict) -> dict:
+        """
+        If we have been ordered to travel but have barely moved for
+        STUCK_WINDOW_S, something the planner does not know about is in the way
+        (a ledge, a wall corner, a flickering wall-avoidance). Give up the goal
+        we were chasing, forget the path, and break away for ESCAPE_S in a random
+        sideways direction, jumping and boosting over whatever it is.
+        """
+        me = obs["self"]
+        pos = me["pos"]
+        t = obs.get("t", 0.0)
+        if t < self._escape_until:
+            self.debug_mode = "unstick"
+            a = self._escape_dir
+            return {"move": [math.cos(a), math.sin(a)],
+                    "boost": me.get("energy", 0.0) > 25.0, "jump": True}
+        self._pos_hist.append((t, pos[0], pos[1]))
+        while self._pos_hist and t - self._pos_hist[0][0] > C.STUCK_WINDOW_S:
+            self._pos_hist.pop(0)
+        mv = out.get("move") or [0.0, 0.0]
+        if (self.debug_mode in _TRAVEL_MODES and math.hypot(mv[0], mv[1]) > 0.5
+                and me.get("grounded", True)
+                and len(self._pos_hist) >= 2
+                and t - self._pos_hist[0][0] >= C.STUCK_WINDOW_S - 0.11
+                and math.hypot(pos[0] - self._pos_hist[0][1],
+                               pos[1] - self._pos_hist[0][2]) < C.STUCK_MIN_MOVE_M):
+            self._escape_dir = (math.atan2(mv[1], mv[0])
+                                + self._rng.choice((1.0, -1.0)) * self._rng.uniform(1.0, 2.2))
+            self._escape_until = t + C.ESCAPE_S
+            if self._explore_goal is not None:
+                step = C.EXPLORE_STEP_M
+                self._visited.add((int(self._explore_goal[0] // step), int(self._explore_goal[1] // step)))
+                self._explore_goal = None
+            if self.nav is not None:
+                self.nav.reset()
+            self._pos_hist.clear()
+            self.debug_mode = "unstick"
+            return {"move": [math.cos(self._escape_dir), math.sin(self._escape_dir)],
+                    "boost": me.get("energy", 0.0) > 25.0, "jump": True}
+        return out
+
+    def _decide(
         self,
         obs:             dict,
         state:           str,
@@ -79,6 +144,7 @@ class MotionController:
         target:          Optional[dict] = None,
         nav_budget_s:    Optional[float] = None,
         mrm_budget_s:    Optional[float] = None,
+        calm:            bool = False,
     ) -> dict:
         me       = obs["self"]
         pos      = me["pos"]
@@ -101,6 +167,8 @@ class MotionController:
 
         self._mrm_budget = mrm_budget_s
         self._remember_loot(obs, sx, sy, t)
+        self._note_visited(sx, sy)
+        self._note_hurt(obs, t)
         dodge, urgent = self._dodge_vector(obs, enemies, world, t)
 
         # ------------------------------------------------------------------
@@ -113,19 +181,48 @@ class MotionController:
                                 dodge=None, mode="zone")
 
         # ------------------------------------------------------------------
+        # RULE 1b: FLEE AN UNSEEN SHOOTER
+        # Hit, but nothing we track to shoot back at: standing still lets it
+        # free-fire. Run directly away, off to one side so it can't just track
+        # a straight line, and boost if there's fuel for it.
+        # ------------------------------------------------------------------
+        if (not enemies and self._hurt_bearing is not None
+                and t - self._hurt_t < C.FLEE_S):
+            a = self._hurt_bearing + math.pi + C.FLEE_JUKE_RAD * self._flee_sign
+            d = (math.cos(a), math.sin(a))
+            return self._finish(d, energy > C.FLEE_BOOST_ENERGY and grounded, False, world, pos,
+                                dodge=dodge, mode="flee")
+
+        # ------------------------------------------------------------------
         # RULE 2: DISENGAGE & DUCK BEHIND COVER
         # ------------------------------------------------------------------
-        if state in ("DISENGAGE_REGEN", "EVADE"):
+        # The opening calm is real: a mech within CALM_AVOID_M and we are not
+        # fighting it → slip out of its sight (quietly) instead of brawling.
+        retreating = state in ("DISENGAGE_REGEN", "EVADE")
+        calm_hide = calm and not retreating and any(
+            math.hypot(e["pos"][0] - sx, e["pos"][1] - sy) <= C.CALM_AVOID_M for e in enemies)
+        if retreating or calm_hide:
             d = R.compute_mrm(
                 pos=pos, enemy_positions=[e["pos"] for e in enemies],
                 zone_cx=zone_cx, zone_cy=zone_cy, zone_r=zone_r,
                 next_zone_cx=next_cx, next_zone_cy=next_cy, next_zone_r=next_r,
                 is_on_roof=is_on_roof, rooftop_goal=None, prev_dir=self._prev_dir,
-                world=world, state=state, time_budget_s=self._mrm_budget,
+                world=world, state=state if retreating else "EVADE",
+                time_budget_s=self._mrm_budget,
             )
-            boost = (energy > 20.0 and grounded) or (urgent and energy > C.DODGE_BOOST_ENERGY)
-            mode = "evade" if state == "EVADE" else "disengage"
+            if calm_hide:
+                boost = urgent and energy > C.DODGE_BOOST_ENERGY      # quiet: boost is audible at 90 m
+                mode = "calm-hide"
+            else:
+                boost = (energy > 20.0 and grounded) or (urgent and energy > C.DODGE_BOOST_ENERGY)
+                mode = "evade" if state == "EVADE" else "disengage"
             return self._finish(d, boost, False, world, pos, dodge=dodge, mode=mode)
+
+        # ------------------------------------------------------------------
+        # RULE 2b: RECOVER — hide still and heal between waves
+        # ------------------------------------------------------------------
+        if state == "RECOVER":
+            return self._recover_move(obs, enemies, world, pos, t, dodge, urgent, nav_budget_s)
 
         # ------------------------------------------------------------------
         # RULE 3: COMBAT AGAINST AN ENEMY MECH
@@ -134,7 +231,7 @@ class MotionController:
         # non-combat state anyway; this is a belt-and-braces guard so the legs
         # never path toward a distant mech just because it is visible.
         foe = self._pick_foe(enemies, target, sx, sy)
-        if foe is not None:
+        if foe is not None and not calm:      # calm: no combat movement vs mechs
             foe_d = math.hypot(foe["pos"][0] - sx, foe["pos"][1] - sy)
             if foe_d <= C.ENGAGE_RANGE:
                 return self._combat_move(obs, foe, enemies, world, t, dodge, urgent, nav_budget_s)
@@ -171,9 +268,21 @@ class MotionController:
             if stop:
                 return self._finish((0.0, 0.0), False, False, world, pos, dodge=dodge, mode="crate")
             d = self._nav_dir(pos, (gx, gy), t, calm_budget)
-            far = math.hypot(gx - sx, gy - sy) > 40.0
-            return self._finish(d, far and energy > 70.0 and grounded, False, world, pos,
-                                dodge=dodge, mode="loot")
+            # No boost while looting: it is audible at 90 m and burns the
+            # energy we need for dodging and fleeing.
+            return self._finish(d, False, False, world, pos, dodge=dodge, mode="loot")
+
+        # ------------------------------------------------------------------
+        # RULE 6b: EXPLORE — nothing known, healthy: sweep unvisited cells of
+        # the safe zone for weapons, cubes, crates and the enemies we have to
+        # kill to score. Standing at the zone centre finds none of them.
+        # ------------------------------------------------------------------
+        hp_frac = me.get("hp", 1.0) / (me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT)
+        if t < C.EXPLORE_UNTIL_S and hp_frac >= C.EXPLORE_HP_FRAC:
+            eg = self._explore_target(sx, sy, t, zone)
+            if eg is not None:
+                d = self._nav_dir(pos, eg, t, calm_budget)
+                return self._finish(d, False, False, world, pos, dodge=dodge, mode="explore")
 
         # ------------------------------------------------------------------
         # RULE 7: ROOFTOP CLIMB (experimental, off by default)
@@ -243,12 +352,23 @@ class MotionController:
 
         # --- Far away: path-find toward it instead of charging blind ---
         if dist > hi + C.FAR_APPROACH_M:
+            # The squad hunts us anyway, so walking at a distant mech only hands
+            # it a target. Approach only when healthy AND the target is alone;
+            # otherwise get out of its sight and let it come to us.
+            max_hp = me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT
+            healthy = me.get("hp", max_hp) >= max_hp * C.APPROACH_MIN_HP_FRAC
+            alone = not any(
+                e is not foe and math.hypot(e["pos"][0] - fx, e["pos"][1] - fy) <= C.APPROACH_ALONE_M
+                for e in enemies)
+            if not (healthy and alone):
+                d = self._cover_dir(pos, enemies or [foe], obs["zone"], world)
+                return self._finish(d, False, False, world, pos, dodge=dodge, mode="hold-cover")
             d = self._nav_dir(pos, (fx, fy), t, nav_budget_s)
             self._update_strafe(t, holds_lightning, foe, sx, sy)
             # small sideways weave so the approach isn't a straight line
             px, py = -uy * self._strafe_sign, ux * self._strafe_sign
             d = _unit(d[0] + 0.35 * px, d[1] + 0.35 * py)
-            return self._finish(d, energy > 50.0 and grounded, False, world, pos,
+            return self._finish(d, energy > C.APPROACH_BOOST_ENERGY and grounded, False, world, pos,
                                 dodge=dodge, mode="approach")
 
         # --- Corner peek: break LOS while the gun reloads ---
@@ -488,6 +608,8 @@ class MotionController:
                 continue
             if zone_soon and math.hypot(lx - ncx, ly - ncy) > nr * 0.9:
                 continue
+            if self.nav is not None and not self.nav.reachable((sx, sy), (lx, ly)):
+                continue                       # on a plateau or in a pocket we cannot walk to
             if kind == "cube":
                 if cubes >= C.STAT_CAP_CUBES:
                     continue
@@ -497,7 +619,9 @@ class MotionController:
                     continue
                 score = dist * 0.8
             else:  # crate
-                if cubes >= C.STAT_CAP_CUBES:
+                # Shooting a crate deals damage and resets regen: not while hurt.
+                hurt = me.get("hp", 1e9) < (me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT) * C.FARM_MIN_HP_FRAC
+                if cubes >= C.STAT_CAP_CUBES or hurt:
                     continue
                 score = dist * 1.0 + 10.0
             if best is None or score < best[0]:
@@ -553,6 +677,126 @@ class MotionController:
     # ==================================================================
     # Helpers
     # ==================================================================
+    # ------------------------------------------------------------------
+    # Exploration & hit tracking
+    # ------------------------------------------------------------------
+    def _note_visited(self, x: float, y: float) -> None:
+        """Mark the 70 m cells within ~40 m of us as swept."""
+        step = C.EXPLORE_STEP_M
+        for ox in (-40.0, 0.0, 40.0):
+            for oy in (-40.0, 0.0, 40.0):
+                self._visited.add((int((x + ox) // step), int((y + oy) // step)))
+
+    def _note_hurt(self, obs: dict, t: float) -> None:
+        """Remember the direction of the latest hit by a mech (drones and the zone excluded)."""
+        for ev in obs.get("events") or []:
+            if (ev.get("type") == "damaged" and ev.get("weapon") not in ("zone", "npc")
+                    and ev.get("bearing") is not None):
+                self._hurt_bearing = float(ev["bearing"])
+                self._hurt_t = t
+                self._flee_sign = 1.0 if self._rng.random() < 0.5 else -1.0
+
+    def _explore_target(self, sx: float, sy: float, t: float, zone: dict) -> Optional[Vec2]:
+        # The "safe" circle: the next one once it is about to start shrinking
+        if t >= zone.get("shrink_start", 1e9) - 10.0:
+            zc, zr = zone["next_center"], zone["next_radius"]
+        else:
+            zc, zr = zone["center"], zone["radius"]
+        eg = self._explore_goal
+        if (eg is None or t - self._explore_t > C.EXPLORE_REPICK_S
+                or math.hypot(eg[0] - sx, eg[1] - sy) < 20.0
+                or math.hypot(eg[0] - zc[0], eg[1] - zc[1]) > zr - 15.0):
+            if eg is not None:
+                # Reached it, timed out on it, or it left the safe circle: either way
+                # this cell is done. (Without this a goal we can never reach — a walled
+                # courtyard, say — would be re-picked forever and we'd pace in front of it.)
+                self._visited.add((int(eg[0] // C.EXPLORE_STEP_M), int(eg[1] // C.EXPLORE_STEP_M)))
+            eg = self._pick_explore(sx, sy, zc, zr)
+            self._explore_goal = eg
+            self._explore_t = t
+        return eg
+
+    def _pick_explore(self, sx: float, sy: float, zc, zr: float) -> Optional[Vec2]:
+        step = C.EXPLORE_STEP_M
+        reach = zr - 20.0
+        if reach <= 0.0:
+            return None
+        n = int(reach // step) + 1
+        cx, cy = int(zc[0] // step), int(zc[1] // step)
+        cands = []
+        for i in range(cx - n, cx + n + 1):
+            for j in range(cy - n, cy + n + 1):
+                px, py = (i + 0.5) * step, (j + 0.5) * step
+                if math.hypot(px - zc[0], py - zc[1]) > reach or (i, j) in self._visited:
+                    continue
+                # nearby first, with a mild pull toward the middle of the circle
+                cands.append((math.hypot(px - sx, py - sy) + 0.3 * math.hypot(px - zc[0], py - zc[1]),
+                              i, j, px, py))
+        cands.sort()
+        grid = getattr(self.nav, "grid", None) if self.nav is not None else None
+        for _, i, j, px, py in cands[:12]:
+            bp = (px, py)
+            if grid is not None:
+                c = grid.nearest_free(*grid.cell_of(px, py), max_r=10)
+                if c is None:
+                    self._visited.add((i, j))
+                    continue
+                bp = grid.center(c[0], c[1])
+            if math.hypot(bp[0] - sx, bp[1] - sy) < 25.0:
+                # Several cells in a blocked strip (map edge, cliff foot) can snap to the
+                # very spot we are already standing at: that is "visited", not a goal.
+                self._visited.add((i, j))
+                self._visited.add((int(bp[0] // step), int(bp[1] // step)))
+                continue
+            if self.nav is None or self.nav.reachable((sx, sy), bp):
+                return bp
+            self._visited.add((i, j))          # a plateau / pocket we cannot walk to: forget it
+        return None
+
+    def _cover_dir(self, pos, enemies: List[dict], zone: dict, world,
+                   is_on_roof: bool = False) -> Vec2:
+        """Direction that breaks line of sight to the known enemies (MRM cover scoring)."""
+        return R.compute_mrm(
+            pos=pos, enemy_positions=[e["pos"] for e in enemies],
+            zone_cx=zone["center"][0], zone_cy=zone["center"][1], zone_r=zone["radius"],
+            next_zone_cx=zone["next_center"][0], next_zone_cy=zone["next_center"][1],
+            next_zone_r=zone["next_radius"], is_on_roof=is_on_roof, rooftop_goal=None,
+            prev_dir=self._prev_dir, world=world, state="EVADE",
+            time_budget_s=self._mrm_budget,
+        )
+
+    def _recover_move(self, obs: dict, enemies: List[dict], world, pos, t: float,
+                      dodge: Optional[Vec2], urgent: bool,
+                      nav_budget_s: Optional[float]) -> dict:
+        """
+        Heal between waves. Regen (45 HP/s) starts after 5 s without dealing or
+        taking damage, so: stand still and silent; slip out of sight of any
+        remembered enemy; and if the circle is about to close on us, walk in
+        (healing continues on the move).
+        """
+        zone = obs["zone"]
+        sx, sy = pos[0], pos[1]
+        ncx, ncy = zone["next_center"][0], zone["next_center"][1]
+        nr = zone["next_radius"]
+        budget = nav_budget_s if nav_budget_s is not None else C.NAV_BUDGET_CALM_S
+
+        if (t >= zone.get("shrink_start", 1e9) - C.RECOVER_ZONE_LEAD_S
+                and math.hypot(sx - ncx, sy - ncy) > nr * 0.85):
+            d = self._nav_dir(pos, (ncx, ncy), t, budget)
+            return self._finish(d, False, False, world, pos, dodge=dodge, mode="recover-rotate")
+
+        near = min((math.hypot(e["pos"][0] - sx, e["pos"][1] - sy) for e in enemies), default=None)
+        if near is not None:
+            d = self._cover_dir(pos, enemies, zone, world)
+            out = self._finish(d, False, False, world, pos, dodge=dodge, mode="recover-hide")
+        else:
+            out = self._finish((0.0, 0.0), False, False, world, pos, dodge=dodge, mode="recover-still")
+        # Walk below the 5 m/s step-sound threshold when nobody is close enough to hear us
+        # anyway; near an enemy, speed matters more than silence.
+        if not urgent and (near is None or near > 70.0):
+            out["move"] = [out["move"][0] * C.RECOVER_MOVE_SCALE, out["move"][1] * C.RECOVER_MOVE_SCALE]
+        return out
+
     def _nav_dir(self, pos, goal: Vec2, t: float, budget: Optional[float]) -> Vec2:
         if self.nav is not None:
             return self.nav.direction(pos, goal, t, budget)

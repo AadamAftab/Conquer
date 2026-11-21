@@ -234,22 +234,49 @@ class EpistemicTracker:
         bearing than a ±7° sound. We only annotate an existing track (never
         invent one) — a beam with no known shooter id is useless for tracking.
         """
+        my_id = obs["self"].get("id")
         for beam in obs.get("beams", []) or []:
             by = beam.get("by")
             if by is None:
                 continue
+            by = int(by)
+            if by == my_id or not (0 <= by < 100):      # ours, or not a mech
+                continue
             path = beam.get("path") or []
             if not path:
-                continue
-            entry = self.beliefs.get(int(by))
-            if entry is None:
                 continue
             try:
                 origin = [float(path[0][0]), float(path[0][1]), float(path[0][2])]
             except (TypeError, ValueError, IndexError):
                 continue
+            age = float(beam.get("age", 0.0) or 0.0)
+            if age > 0.5:
+                continue                      # too old to locate anyone
+            beam_t = t - age
+
+            entry = self.beliefs.get(by)
+            if entry is not None and entry.tier == 0:
+                # Seen directly this tick: nothing to learn about WHERE.
+                entry.beam_pos = origin
+                entry.last_beam_t = beam_t
+                continue
+
+            # Not in view (or never seen): the muzzle is an exact position, far
+            # better than a ±7° sound. Track the shooter at T1 so the bot turns
+            # toward it, shoots back and takes cover instead of being a target
+            # that cannot see what is killing it.
+            feet = [origin[0], origin[1], origin[2] - C.MECH_MUZZLE_HEIGHT]
+            if entry is None:
+                entry = BeliefEntry(id=by, kind="mech", tier=1, pos=feet, vel=[0.0, 0.0, 0.0])
+                self.beliefs[by] = entry
+            entry.tier = 1
+            entry.pos = feet
+            entry.vel = [0.0, 0.0, 0.0]
+            entry.confidence = C.FIRE_CONFIDENCE_T1
+            entry.uncertainty_radius = 3.0
+            entry.last_seen_t = beam_t
             entry.beam_pos = origin
-            entry.last_beam_t = t - float(beam.get("age", 0.0) or 0.0)
+            entry.last_beam_t = beam_t
 
     # ------------------------------------------------------------------
     def _in_fov(self, my_x: float, my_y: float, my_aim_yaw: float,
@@ -293,6 +320,8 @@ class EpistemicTracker:
         for aid, entry in list(self.beliefs.items()):
             if entry.tier not in (1,):
                 continue   # only apply to T1 (T0 is confirmed, T2 is already uncertain)
+            if t - entry.last_beam_t < 0.3:
+                continue   # just located by a beam: hidden from us, not gone
             bx, by = entry.pos[0], entry.pos[1]
             in_view = (self._in_fov(my_x, my_y, my_aim_yaw, bx, by) or
                        self._in_proximity(my_x, my_y, bx, by))

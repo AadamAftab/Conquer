@@ -34,6 +34,7 @@ class Brain:
     ZONE_ROTATION     = "ZONE_ROTATION"
     ENDGAME_SURVIVAL  = "ENDGAME_SURVIVAL"
     EVADE             = "EVADE"
+    RECOVER           = "RECOVER"
 
     def __init__(self) -> None:
         self.state: str = self.BOOTSTRAP_LOOT
@@ -42,6 +43,15 @@ class Brain:
         self._prev_state: str = self.BOOTSTRAP_LOOT
         # Opening calm: we deliberately do not engage for the first stretch.
         self._entered_combat: bool = False
+        # True while the opening calm is in force this tick. motion.py and
+        # combat.py read it: calm means "don't fight mechs, don't reveal
+        # ourselves", not just a state label.
+        self.calm: bool = False
+        self._t_now: float = 0.0
+        self._last_kill_t: float = -1e9
+        self._attackers: dict = {}          # mech id -> last time it hit us
+        self._recover_since: float = 0.0
+        self._hold_until: float = 0.0       # minimum retreat time (no flapping)
 
     def decide_state(
         self,
@@ -60,15 +70,26 @@ class Brain:
         threat_count = tracker.threat_count()
         any_visible = tracker.any_visible()
         self._ticks_in_state += 1
+        self._t_now = t
+        self.calm = False
 
         # Did someone actually hit us this tick? That overrides the calm opening:
-        # a bot that is being shot at cannot pretend it is alone.
-        under_fire = any(
-            ev.get("type") == "damaged" and ev.get("weapon") != "zone"
-            for ev in (obs.get("events") or [])
-        )
+        # a bot that is being shot at cannot pretend it is alone. Also keep a
+        # record of WHO hit us (including mechs we cannot see) and of kills.
+        under_fire = False
+        for ev in (obs.get("events") or []):
+            typ = ev.get("type")
+            if typ == "kill":
+                self._last_kill_t = t
+            elif typ == "damaged" and ev.get("weapon") != "zone":
+                under_fire = True
+                by = ev.get("by")
+                if by is not None and 0 <= int(by) < 100:   # mechs only (NPC ids are 100+)
+                    self._attackers[int(by)] = t
         if under_fire:
             self._entered_combat = True
+        n_attackers = sum(1 for ts in self._attackers.values()
+                          if t - ts < C.ATTACKER_WINDOW_S)
 
         # 0. Endgame circle check (outranks the calm opening: the circle is the
         #    clock, and by the last phase there is nowhere left to hide).
@@ -84,6 +105,7 @@ class Brain:
         if (not self._entered_combat
                 and t < C.OPENING_CALM_S
                 and hp >= me.get("max_hp", C.HP_DEFAULT) * 0.9):
+            self.calm = True
             self._transition(self.BOOTSTRAP_LOOT)
             return self.state
 
@@ -102,7 +124,7 @@ class Brain:
         # 2a. Panic: an enemy is inside PANIC_RANGE and we are not comfortable.
         #     Too close to kite from; hard-flee rather than trade point-blank.
         if (near_d is not None and near_d <= C.PANIC_RANGE
-                and hp < max_hp * C.REGEN_RESUME_FRAC):
+                and hp < max_hp * C.PANIC_HP_FRAC):
             self._entered_combat = True
             self._transition(self.EVADE)
             return self.state
@@ -110,18 +132,35 @@ class Brain:
         # 2b. Outnumbered: the squad shares vision, so a pack that knows where
         #     we are converges. Flee rather than trade at a disadvantage while
         #     there is still a field left to hide in.
-        if (threat_count >= C.MULTI_ENEMY_THRESHOLD
+        #     "Outnumbered" counts enemies that are hitting us even when we
+        #     cannot see them: two shooters on us is a lost fight either way.
+        #     Deliberately late (OUTNUMBERED_HP_FRAC, 60 %): the active bots in
+        #     practice keep fighting until quite hurt, and kills are the score.
+        if ((threat_count >= C.MULTI_ENEMY_THRESHOLD or n_attackers >= 2)
                 and alive > C.LATE_GAME_ALIVE
-                and hp < max_hp * C.REGEN_RESUME_FRAC):
+                and hp < max_hp * C.OUTNUMBERED_HP_FRAC):
             self._entered_combat = True
             self._transition(self.EVADE)
             return self.state
 
-        # 3. Stay disengaged until HP has recovered or no enemy mech has been
-        #    seen recently (T0/T1), so we don't re-engage the moment LOS breaks
+        # 2c. Hit while hiding to heal (an unseen shooter found us): move.
+        if self.state == self.RECOVER and under_fire:
+            self._entered_combat = True
+            self._transition(self.EVADE)
+            return self.state
+
+        # 3. Stay disengaged until HP has recovered or contact is broken, with a
+        #    short minimum so a flickering sighting can't flap us in and out.
+        #    When contact breaks we go to RECOVER (hide, heal) rather than back
+        #    to looting, so the next hunter meets a healthy mech.
         if self.state in (self.DISENGAGE_REGEN, self.EVADE):
-            if hp >= max_hp * C.REGEN_RESUME_FRAC or not recent_threat:
-                self._transition(self.AMBUSH_HUNTER if any_visible else self.BOOTSTRAP_LOOT)
+            if t < self._hold_until:
+                return self.state
+            if any_visible and hp >= max_hp * C.REGEN_RESUME_FRAC:
+                self._transition(self.AMBUSH_HUNTER)
+            elif hp >= max_hp * C.REGEN_RESUME_FRAC or not recent_threat:
+                self._transition(self.RECOVER if hp < max_hp * C.RECOVER_DONE_FRAC
+                                 else self.BOOTSTRAP_LOOT)
             return self.state
 
         # 4. Core combat transition. Engage only inside ENGAGE_RANGE (the laser
@@ -140,13 +179,31 @@ class Brain:
                 self._transition(self.AMBUSH_HUNTER)
                 return self.state
 
-        # 5. Otherwise, rotate and loot toward safe zone
+        # 5. Recover between waves. Regen is 45 HP/s but only after 5 s without
+        #    dealing OR taking damage, and the squad sends the next hunter
+        #    soon: after a kill, or whenever we are hurt with nobody in sight,
+        #    hide still and deal no damage (crates and drones included) until
+        #    healed. Capped so a regen that never starts can't pin us here.
+        if self.state == self.RECOVER:
+            if hp >= max_hp * C.RECOVER_DONE_FRAC or t - self._recover_since > C.RECOVER_MAX_S:
+                self._transition(self.BOOTSTRAP_LOOT)
+            return self.state
+        just_killed = t - self._last_kill_t < C.POST_KILL_WINDOW_S
+        if hp < max_hp * C.RECOVER_START_FRAC or (just_killed and hp < max_hp * C.POST_KILL_HP_FRAC):
+            self._transition(self.RECOVER)
+            return self.state
+
+        # 6. Otherwise, rotate and loot toward safe zone
         self._transition(self.BOOTSTRAP_LOOT)
         return self.state
 
     def _transition(self, new_state: str) -> None:
         if new_state == self.state:
             return
+        if new_state == self.RECOVER:
+            self._recover_since = self._t_now
+        if new_state in (self.DISENGAGE_REGEN, self.EVADE):
+            self._hold_until = self._t_now + C.EVADE_MIN_S
         mf.log(f"Brain: {self.state} → {new_state} (after {self._ticks_in_state} ticks)")
         self._prev_state = self.state
         self.state = new_state

@@ -67,6 +67,7 @@ class NavGrid:
                     if gx * gx + gy * gy > 1.42:
                         ok = False
                 self.free[row + i] = 1 if ok else 0
+        self._block_ledges(world)
         # the outer ring is the arena wall
         for i in range(self.nx):
             self.free[i] = 0
@@ -74,7 +75,82 @@ class NavGrid:
         for j in range(self.ny):
             self.free[j * self.nx] = 0
             self.free[j * self.nx + self.nx - 1] = 0
+        self._label_regions()
         self.ok = True
+
+    def _label_regions(self) -> None:
+        """
+        Number the connected free regions (4-connected: exactly what A* can
+        traverse, since it never cuts corners). Cliffs and walls split the map
+        into plateaus and pockets; a goal in another region is unreachable on
+        foot, and walking at it in a straight line just means walking into the
+        cliff.
+        """
+        nx, ny, free = self.nx, self.ny, self.free
+        comp = [0] * (nx * ny)
+        cid = 0
+        for s in range(nx * ny):
+            if free[s] != 1 or comp[s]:
+                continue
+            cid += 1
+            comp[s] = cid
+            stack = [s]
+            while stack:
+                idx = stack.pop()
+                i, j = idx % nx, idx // nx
+                if i > 0 and free[idx - 1] == 1 and not comp[idx - 1]:
+                    comp[idx - 1] = cid
+                    stack.append(idx - 1)
+                if i < nx - 1 and free[idx + 1] == 1 and not comp[idx + 1]:
+                    comp[idx + 1] = cid
+                    stack.append(idx + 1)
+                if j > 0 and free[idx - nx] == 1 and not comp[idx - nx]:
+                    comp[idx - nx] = cid
+                    stack.append(idx - nx)
+                if j < ny - 1 and free[idx + nx] == 1 and not comp[idx + nx]:
+                    comp[idx + nx] = cid
+                    stack.append(idx + nx)
+        self.comp = comp
+
+    def region_of(self, x: float, y: float, max_r: int = 6) -> int:
+        """Region id of the free cell nearest (x, y); 0 if none is close."""
+        i, j = self.cell_of(x, y)
+        c = self.nearest_free(i, j, max_r=max_r)
+        return self.comp[c[1] * self.nx + c[0]] if c is not None else 0
+
+    def _block_ledges(self, world) -> None:
+        """
+        A terrain step taller than step_up (1.2 m) between two neighbouring 1 m
+        samples is a wall (protocol §7: "anything taller is a wall"). The slope
+        test at cell centres misses these thin cliffs, so the planner would route
+        straight into one. Block every cell that contains such a step.
+        """
+        terrain = world._terrain
+        tnx, tny = world._tnx, world._tny
+        tmin_x, tmin_y, tstep = world._tmin_x, world._tmin_y, world._tstep
+        limit = int(C.STEP_UP * 100.0)               # terrain is stored in centimetres
+        free = self.free
+        for j in range(self.ny):
+            j0 = max(0, int((self.y0 + j * self.cell - tmin_y) / tstep))
+            j1 = min(tny - 2, int((self.y0 + (j + 1) * self.cell - tmin_y) / tstep))
+            for i in range(self.nx):
+                if free[j * self.nx + i] != 1:
+                    continue
+                i0 = max(0, int((self.x0 + i * self.cell - tmin_x) / tstep))
+                i1 = min(tnx - 2, int((self.x0 + (i + 1) * self.cell - tmin_x) / tstep))
+                cliff = False
+                for jj in range(j0, j1 + 1):
+                    row = jj * tnx
+                    up = row + tnx
+                    for ii in range(i0, i1 + 1):
+                        h = terrain[row + ii]
+                        if abs(terrain[row + ii + 1] - h) > limit or abs(terrain[up + ii] - h) > limit:
+                            cliff = True
+                            break
+                    if cliff:
+                        break
+                if cliff:
+                    free[j * self.nx + i] = 0
 
     # ------------------------------------------------------------------
     def cell_of(self, x: float, y: float) -> Tuple[int, int]:
@@ -202,6 +278,14 @@ class PathFollower:
         self.path = []
         self.goal = None
         self._goal_idx = None
+
+    def reachable(self, a, b) -> bool:
+        """Can we walk from a to b? (Same connected region of the walkability grid.)"""
+        if self.grid is None:
+            return True
+        ra = self.grid.region_of(a[0], a[1])
+        rb = self.grid.region_of(b[0], b[1], max_r=10)
+        return ra != 0 and ra == rb
 
     def _restart(self, goal: Tuple[float, float], goal_idx: int) -> None:
         self.goal = goal

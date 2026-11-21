@@ -53,10 +53,18 @@ def gun_lead_aim(
     target_vel: List[float],
     muzzle_height: float,
     gun_speed: float = None,
+    center_h: float = 4.5,
+    latency: float = None,
 ) -> Optional[Tuple[float, float]]:
     """
     Compute the (yaw, pitch) needed to intercept a moving target with an
     Arm Gun projectile (flat trajectory, constant speed, no gravity drop).
+
+    center_h: height of the point to hit above the target's feet (4.5 m for a
+              mech, scaled up by its cubes; less for drones and crates).
+    latency:  seconds between deciding and the shot leaving the barrel (the
+              action applies on the next sim tick and the torso is still
+              slewing); the target keeps moving meanwhile, so lead for it.
 
     Uses the closed-form quadratic solution:
         (|Vt|² - v0²) t² + 2(D·Vt) t + |D|² = 0
@@ -71,11 +79,16 @@ def gun_lead_aim(
     # Muzzle position (gun fires from muzzle_height, not feet)
     muzzle = [me_pos[0], me_pos[1], me_pos[2] + muzzle_height]
 
-    # Aim at centre of mass (feet + 4.5 m)
-    aim_at = [target_pos[0], target_pos[1], target_pos[2] + 4.5]
+    if latency is None:
+        latency = C.AIM_LATENCY_S
+    Vt = list(target_vel)                  # target velocity
+
+    # Aim at the centre of mass, where the target will be when the shot leaves
+    aim_at = [target_pos[0] + Vt[0] * latency,
+              target_pos[1] + Vt[1] * latency,
+              target_pos[2] + center_h + Vt[2] * latency]
 
     D  = _sub(aim_at, muzzle)              # relative position
-    Vt = list(target_vel)                  # target velocity
 
     A = _len2(Vt) - gun_speed * gun_speed
     B = 2.0 * _dot(D, Vt)
@@ -460,29 +473,32 @@ def pick_upgrade(offer: dict) -> int:
 # 5. Weapon pickup decision
 # ---------------------------------------------------------------------------
 
+WEAPON_PRIORITY = {"lightning": 3, "laser": 2, "mortar": 1}
+
+
 def should_take_pickup(obs: dict, pickup: dict) -> bool:
     """
     Decide whether to take a weapon pickup.
     Never drop the Arm Gun (slot 0).
-    Take any weapon if slot 1 is empty, or upgrade (laser > lightning > mortar).
+    Take any weapon if slot 1 is empty, or upgrade (lightning > laser > mortar).
+
+    Lightning leads: 240 DPS at close range, shorts a laser, and the strongest
+    bots in practice build around it. Mortar is only a placeholder (it is
+    beaten by both and useless up close).
     """
     kind = pickup.get("kind", "")
-    if kind not in ("laser", "lightning", "mortar"):
+    if kind not in WEAPON_PRIORITY:
         return False
 
     weapons = obs["self"].get("weapons", [None, None])
+    # Never hold two of a kind (the server refuses it)
+    if any(w and w.get("kind") == kind for w in weapons):
+        return False
     slot1 = weapons[1] if len(weapons) > 1 else None
     if slot1 is None:
         return True
 
-    slot1_kind = slot1.get("kind")
-    # Hierarchy: laser > lightning > mortar
-    if slot1_kind == "mortar" and kind in ("lightning", "laser"):
-        return True
-    if slot1_kind == "lightning" and kind == "laser":
-        return True
-
-    return False
+    return WEAPON_PRIORITY[kind] > WEAPON_PRIORITY.get(slot1.get("kind"), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +530,8 @@ class CombatController:
         # Who shot us and when (match time), and when we last took weapon damage
         self._attackers:    Dict[int, float] = {}
         self._last_hurt_t:  float = -1e9
+        self._hurt_bearing: Optional[float] = None   # yaw toward our latest attacker
+        self._npc_hurt_t:   float = -1e9             # when a drone last hit us
         # Current target (read by motion.py for positioning)
         self.target: Optional[dict] = None
 
@@ -562,10 +580,14 @@ class CombatController:
         return math.degrees(math.hypot(dyaw, dpitch))
 
     # ------------------------------------------------------------------
-    def decide(self, obs: dict, tracker_beliefs: dict, world=None, state: str = "") -> dict:
+    def decide(self, obs: dict, tracker_beliefs: dict, world=None, state: str = "",
+               calm: bool = False) -> dict:
         """
         Main entry point called by brain.py each tick.
         Returns a partial action dict (tick will be set by the wrapper).
+
+        calm: the opening calm is in force (brain.calm): track mechs but do not
+        fire at them — gunfire is audible at 320 m and starts the squad's hunt.
         """
         me       = obs["self"]
         t        = obs["t"]
@@ -592,6 +614,10 @@ class CombatController:
                 self._laser.notify_shorted(t)
             elif event.get("type") == "damaged" and event.get("weapon") != "zone":
                 self._last_hurt_t = t
+                if event.get("bearing") is not None:     # world-frame yaw toward the shooter
+                    self._hurt_bearing = float(event["bearing"])
+                if event.get("weapon") == "npc":
+                    self._npc_hurt_t = t
                 if event.get("by") is not None:
                     self._attackers[int(event["by"])] = t
         turn_rate  = stats.get("turn_rate", C.TURN_RATE)
@@ -621,16 +647,32 @@ class CombatController:
         # shooting a crate or drone while disengaging stops us healing. Skip
         # resource targets entirely in the retreat/evade states (and never
         # substitute a crate/drone for a mech that is actually visible).
-        if state in ("DISENGAGE_REGEN", "EVADE") and target is not None \
-                and target.get("kind") in ("crate", "npc"):
-            target = None
+        # The same holds whenever we are hurt: below FARM_MIN_HP_FRAC no crate or
+        # drone gets shot (regen needs 5 s without DEALING damage), unless a
+        # drone is itself shooting us — then shooting back is self-defence.
+        if target is not None and target.get("kind") in ("crate", "npc"):
+            max_hp = me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT
+            hurt = me.get("hp", max_hp) < max_hp * C.FARM_MIN_HP_FRAC
+            drone_on_us = target.get("kind") == "npc" and t - self._npc_hurt_t < 3.0
+            if state in ("DISENGAGE_REGEN", "EVADE", "RECOVER") or (hurt and not drone_on_us):
+                target = None
         self.target = target
 
         # ---- Active Torso Scanning when no target ----
         if target is None:
+            # Something just hit us and we can't see it: face it. A hit from
+            # behind costs x1.5, and turning also brings the shooter into our
+            # 120° view so the normal targeting can take over. (`bearing` is
+            # exact, unlike a sound's ±7°.) We don't fire blind: range unknown.
+            hurt_recent = (self._hurt_bearing is not None
+                           and t - self._last_hurt_t < C.HURT_AIM_S)
             # Check for recent sounds to snap aim towards
             recent_sounds = [s for s in obs.get("sounds", []) if s.get("kind") in ("step", "boost", "gun", "laser_charge", "lightning", "mortar")]
-            if recent_sounds:
+            if hurt_recent:
+                scan_yaw = _wrap(self._hurt_bearing)
+                action["aim"] = [scan_yaw, 0.0]
+                self._scan_yaw = scan_yaw
+            elif recent_sounds:
                 best_sound = min(recent_sounds, key=lambda s: s.get("age", 999.0))
                 scan_yaw = best_sound.get("bearing", self._scan_yaw)
                 # Wrap to [-pi, pi]
@@ -663,7 +705,11 @@ class CombatController:
         dist_to_target = _dist2d(pos[0], pos[1], tgt_pos[0], tgt_pos[1])
 
         # Target center of mass (mech: +4.5m, npc: +1.8m, crate: +1.0m) and body radius
-        tgt_h, tgt_r = 4.5, C.MECH_RADIUS
+        # A mech grows 5 % per cube it carries (no cap): centre of mass and
+        # radius scale with it, so a cube-heavy enemy is bigger and taller.
+        size = 1.0 + C.SIZE_PER_CUBE * float(target.get("cubes") or 0) \
+            if target.get("kind") == "mech" else 1.0
+        tgt_h, tgt_r = 4.5 * size, C.MECH_RADIUS * size
         if target.get("kind") == "npc":
             tgt_h, tgt_r = 1.8, 1.8
         elif target.get("kind") == "crate":
@@ -678,7 +724,7 @@ class CombatController:
                                        tgt_pos[0], tgt_pos[1], tgt_pos[2] + tgt_h)
 
         # ---- Primary aim: gun quadratic lead ----
-        gun_aim = gun_lead_aim(pos, tgt_pos, tgt_vel, muzzle_h)
+        gun_aim = gun_lead_aim(pos, tgt_pos, tgt_vel, muzzle_h, center_h=tgt_h)
         if gun_aim is None:
             dx = tgt_pos[0] - pos[0]
             dy = tgt_pos[1] - pos[1]
@@ -690,6 +736,11 @@ class CombatController:
         aim_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, aim_pitch))
         action["aim"] = [aim_yaw, aim_pitch]
         self._last_aim = [aim_yaw, aim_pitch]
+
+        # ---- Opening calm: keep the torso on the mech but hold fire ----
+        if calm and target.get("kind") == "mech":
+            action["fire"] = [False, False]
+            return action
 
         # ---- Slot 1 weapon analysis ----
         w0 = weapons[0] if len(weapons) > 0 else None
