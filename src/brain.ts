@@ -164,7 +164,7 @@ export class Brain {
     const w = this.w, m = this.m
     w.update(obs)
     // practice (house squad): aggressive core; free-for-all: ninja core below
-    if (w.mode !== "ffa" && !RP.legacy) {
+    if ((w.mode !== "ffa" || RP.ffaPractice) && !RP.legacy) {
       const a = this.practice.act(obs, T0)
       this.state = this.practice.state
       const ms = performance.now() - T0

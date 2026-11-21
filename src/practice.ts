@@ -10,7 +10,7 @@ const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficienc
 /** Tunables of the practice core (BOTP env var overrides them in local tests). */
 export const PP = {
   laserRange: 145,
-  gunRange: 70,
+  gunRange: 85,
   lightRange: 28,
   retreatHp: 0.38,
   retreatExit: 0.8,
@@ -23,9 +23,26 @@ export const PP = {
   /** economy loop: cube/weapon detours even mid-fight, wider farming, opportunistic farm shots */
   econ: true,
   /** conditional "losing" retreat with a 6 s hide window, then heal in cover */
-  ttun: true,
+  ttun: false,
   /** never drop the gun: gun + best special (laser preferred) */
-  keepGun: true,
+  keepGun: false,
+  /** strafe flip timing: next flip after strafeMin + rnd * strafeSpan seconds, flip probability */
+  strafeMin: 1.0,
+  strafeSpan: 1.6,
+  strafeP: 0.7,
+  /** boost while dodging bullets (energy above this; 999 = never) */
+  dodgeBoost: 999,
+  /** "losing" thresholds: alone vs healthier target, 2+ close, 3+ close; heal below / inside hide window */
+  loseHp1: 0.35,
+  loseHp2: 0.55,
+  loseHp3: 0.8,
+  healHp: 0.55,
+  healHide: 0.9,
+  hideS: 6,
+  cubeHi: 70,
+  cubeLo: 40,
+  /** ignore weapon pickups more than 2 m above the ground */
+  groundOnly: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -155,8 +172,8 @@ export class Practice {
     if (PP.ttun) {
       const n160 = seen.filter((s) => s.d < 160 && (s.vis || t - s.e.hitUsT < 3)).length
       const tFrac = T ? T.e.hp / Math.max(1, T.e.maxHp) : 0
-      losing = !finishing && ((hpFrac < 0.35 && T !== null && tFrac > hpFrac + 0.1) || (n160 >= 2 && hpFrac < 0.55) || (n160 >= 3 && hpFrac < 0.8))
-      if (losing) this.hideUntil = t + 6
+      losing = !finishing && ((hpFrac < PP.loseHp1 && T !== null && tFrac > hpFrac + 0.1) || (n160 >= 2 && hpFrac < PP.loseHp2) || (n160 >= 3 && hpFrac < PP.loseHp3))
+      if (losing) this.hideUntil = t + PP.hideS
     }
 
     // ---------- zone ----------
@@ -175,7 +192,7 @@ export class Practice {
 
     // ---------- goals ----------
     const drop = PP.drops ? this.dropGoal(obs, x, y, t, seen, hpFrac, walk) : null
-    let cube = this.nearestCube(x, y, z, safe, PP.econ ? (hpFrac > 0.5 ? 70 : 40) : 70)
+    let cube = this.nearestCube(x, y, z, safe, PP.econ ? (hpFrac > 0.5 ? PP.cubeHi : PP.cubeLo) : 70)
     // the cubes of the mechs we killed lie where they died: go and get them when nobody is close
     if (!cube && PP.killSites && hpFrac > 0.4 && !seen.some((s) => s.d < 60)) {
       for (const k of w.killSites) {
@@ -184,7 +201,7 @@ export class Practice {
       }
     }
     const pick = this.wantedPickup(slots, x, y, z, safe, gunOnly ? 240 : 160)
-    const needHeal = PP.ttun && !shootable && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9)) && !(cube && cube.d < 40)
+    const needHeal = PP.ttun && !shootable && (hpFrac < PP.healHp || (t < this.hideUntil && hpFrac < PP.healHide)) && !(cube && cube.d < 40)
 
     // ---------- mode ----------
     let mode: Mode
@@ -278,6 +295,7 @@ export class Practice {
     if (mode !== "cover") this.state = mode
     // dodges
     const dodge = this.dodge(obs, x, y, seen)
+    if ((dodge[0] || dodge[1]) && me.energy > PP.dodgeBoost && Math.hypot(dodge[0], dodge[1]) > 0.3) boost = true
     if (dodge[0] || dodge[1]) {
       mv = [mv[0] + dodge[0], mv[1] + dodge[1]]
       const l = Math.hypot(mv[0], mv[1])
@@ -380,7 +398,8 @@ export class Practice {
     let best: { pos: V3; d: number } | null = null
     for (const p of this.h.w.pickups.values()) {
       if (!this.wants(p.kind, slots).ok) continue
-      if (Math.abs(p.pos[2] - z) > 25) continue
+      // ground level only: roof pickups cost long exposed climbs
+      if (PP.groundOnly ? p.pos[2] - this.h.m.groundAt(p.pos[0], p.pos[1]) > 6 : Math.abs(p.pos[2] - z) > 25) continue
       const d = Math.hypot(p.pos[0] - x, p.pos[1] - y)
       if (d > maxD || (d > 30 && !safe(p.pos[0], p.pos[1]))) continue
       if (!best || d < best.d) best = { pos: p.pos, d }
@@ -513,8 +532,8 @@ export class Practice {
     const ux = (T.e.pos[0] - x) / Math.max(1, d), uy = (T.e.pos[1] - y) / Math.max(1, d)
     const radial = clamp((d - pref) / 30, -1, 1)
     if (t > this.strafeT) {
-      if (this.h.rnd() < 0.7) this.strafeSign = -this.strafeSign
-      this.strafeT = t + 1.0 + this.h.rnd() * 1.6
+      if (this.h.rnd() < PP.strafeP) this.strafeSign = -this.strafeSign
+      this.strafeT = t + PP.strafeMin + this.h.rnd() * PP.strafeSpan
     }
     const s = this.strafeSign * PP.strafe
     let gx = x + (ux * radial - uy * s) * 20, gy = y + (uy * radial + ux * s) * 20

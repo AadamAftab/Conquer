@@ -34,6 +34,8 @@ export const RP = {
   campAdv: 1.5,
   /** use the v8 brain in practice too (A/B) */
   legacy: false,
+  /** play the aggressive practice core in free-for-all too (instead of the ninja core) */
+  ffaPractice: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
