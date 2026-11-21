@@ -6,7 +6,7 @@ const (
 	// It acts before the bot can tell practice from free-for-all, so it changes free-for-all too.
 	tweakHopT = 0.0
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
-	tweakLoseK = 1.0
+	tweakLoseK = 0.3
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
 	tweakSquadT = 20.0
 	// tweakDropV: squad mode only, weight of uncontested supply drops in the calm loot choice (0 = never, as conquer; 1 = 3 cubes + missing HP).
@@ -44,7 +44,7 @@ const (
 	// In 77 recorded free-for-all matches the first such death always came before 37 s, for every mech, so those
 	// matches play exactly as before; in practice a late zone or drone death no longer drops the squad settings.
 	// (0 = original: any such death, at any time.)
-	tweakFFAUntil = 0.0
+	tweakFFAUntil = 60.0
 )
 
 type tweakSet struct {
