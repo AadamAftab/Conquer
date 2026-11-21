@@ -70,6 +70,8 @@ export class Brain {
     const m = this.m
     const rq = (this.hello.config.mech.radius ?? 2.5) + 0.9
     const comp = m.comp(rq)
+    const per = this.perCube
+    for (let c = 0; c <= 14; c++) m.comp((this.hello.config.mech.radius ?? 2.5) * (1 + per * c) + 0.9)
     const r = rng(7)
     let n = 0
     for (let k = 0; k < 3000; k++) {
@@ -87,6 +89,23 @@ export class Brain {
     }
     this.nav.pf.state = "idle"
     for (let k = 0; k < 200; k++) n += m.walkLine(0, 0, r() * 50, r() * 50, rq) ? 1 : 0
+    // compile the combat paths too (cover planner, risk, aim) on fake data
+    const cfg = this.hello.config
+    const fakeMe: any = { pos: [0, 0, 0], vel: [3, 1, 0], aim: [0, 0], hp: 1400, max_hp: 1400, energy: 100, cubes: 0, weapons: [{ kind: "gun", cooldown: 0, ammo: 12, reload: 0, stats: cfg.weapons.gun }, { kind: "laser", cooldown: 0, charge: 0, stats: cfg.weapons.laser }], stats: { ...cfg.mech } }
+    for (let k = 0; k < 40; k++) {
+      const s0 = m.snap(r() * 600 - 300, r() * 400 - 200, rq, -1, 20)
+      if (s0 < 0) continue
+      const x = m.nodeX(s0), y = m.nodeY(s0)
+      const tr: Track = { id: 5, kind: "mech", pos: [x + 80 * Math.cos(k), y + 80 * Math.sin(k), m.surfAt(x, y)], vel: [5, -3, 0], aim: [1, 0], hp: 1000, maxHp: 1400, cubes: 1, weapons: ["gun", "laser"], charging: false, seenT: 0, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [[0, 5, -3], [0.1, 5, -3], [0.2, -5, 3], [0.3, -5, 3], [0.4, 5, -3]] }
+      fakeMe.pos = [x, y, m.surfAt(x, y)]
+      const p = planPeek(m, x, y, rq, comp, comp[s0], [tr], tr, 1, this.perCube, 0, () => true)
+      if (p.hide) n++
+      for (let j = 0; j < 10; j++) {
+        n += assess(m, this.w, fakeMe, x, y, tr, cfg, this.perCube).ttd > 0 ? 1 : 0
+        n += leadAim(m, [x, y, fakeMe.pos[2] + 7], tr, 252, 0.05, 4.5, this.g).dist > 0 ? 1 : 0
+        n += hitProb(1, 1, 2.5) > 0 ? 1 : 0
+      }
+    }
     if (n < 0) log(n)
   }
 
@@ -171,7 +190,9 @@ export class Brain {
     let gunOk = false
     let lightOk = false
     const go = (gx: number, gy: number, budget = 5000) => {
-      const r = this.nav.steer(x, y, gx, gy, t, budget)
+      // stay well inside the 50 ms budget: shrink path search when this decision is already slow
+      const spent = performance.now() - T0
+      const r = this.nav.steer(x, y, gx, gy, t, spent > 20 ? 300 : spent > 10 ? Math.min(budget, 1500) : budget)
       if (r.jump) jump = true
       if (r.boost) boost = true
       return r
@@ -413,6 +434,7 @@ export class Brain {
     // ---------- debug ----------
     const ms = performance.now() - T0
     if (ms > 25) this.slowTicks++
+    if (ms > 12) log(`slow act ${ms.toFixed(1)} ms at t=${t} state=${this.state}`)
     draw.label(`${this.state} ${w.mode[0]} ${risk.level[0]}${risk.adv < 9 ? risk.adv.toFixed(1) : ""} hp${Math.round(hpFrac * 100)} e${Math.round(me.energy)} ${shootT ? "→" + shootT.id : ""} ${ms.toFixed(0)}ms`)
     if (shootT) draw.line(muz, [shootT.pos[0], shootT.pos[1], shootT.pos[2] + 4], "#ff4040")
     if (this.plan && t - this.plan.t < 1) {

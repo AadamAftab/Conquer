@@ -307,25 +307,31 @@ export class GameMap {
     return c
   }
 
-  /** Nearest passable node to (x, y), optionally in component `want` (spiral search). */
+  /** Nearest passable node to (x, y), optionally in component `want` (ring search, O(maxR^2)). */
   snap(x: number, y: number, rq: number, want = -1, maxR = 40): number {
     const NW = this.NW, NH = this.NH
     const I0 = Math.floor((x - this.minX) / (2 * this.step)), J0 = Math.floor((y - this.minY) / (2 * this.step))
     const comp = want >= 0 ? this.comp(rq) : null
     let best = -1, bestD = Infinity
-    for (let r = 0; r <= maxR; r++) {
-      for (let dj = -r; dj <= r; dj++)
-        for (let di = -r; di <= r; di++) {
-          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue
-          const I = I0 + di, J = J0 + dj
-          if (I < 0 || J < 0 || I >= NW || J >= NH) continue
-          const n = J * NW + I
-          if (this.nClear[n] < rq) continue
-          if (comp && comp[n] !== want) continue
-          const d = di * di + dj * dj
-          if (d < bestD) (bestD = d), (best = n)
-        }
+    const test = (I: number, J: number) => {
+      if (I < 0 || J < 0 || I >= NW || J >= NH) return
+      const n = J * NW + I
+      if (this.nClear[n] < rq) return
+      if (comp && comp[n] !== want) return
+      const d = (I - I0) * (I - I0) + (J - J0) * (J - J0)
+      if (d < bestD) (bestD = d), (best = n)
+    }
+    test(I0, J0)
+    for (let r = 1; r <= maxR; r++) {
       if (best >= 0 && r * r > bestD) break
+      for (let k = -r; k <= r; k++) {
+        test(I0 + k, J0 - r)
+        test(I0 + k, J0 + r)
+      }
+      for (let k = -r + 1; k <= r - 1; k++) {
+        test(I0 - r, J0 + k)
+        test(I0 + r, J0 + k)
+      }
     }
     return best
   }
