@@ -6,7 +6,7 @@ const (
 	// It acts before the bot can tell practice from free-for-all, so it changes free-for-all too.
 	tweakHopT = 0.0
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
-	tweakLoseK = 0.3
+	tweakLoseK = 1.0
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
 	tweakSquadT = 20.0
 	// tweakDropV: squad mode only, weight of uncontested supply drops in the calm loot choice (0 = never, as giddy; 1 = 3 cubes + missing HP).
@@ -30,13 +30,13 @@ const (
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
 	tweakHear = false
 	// tweakNpcGoneHP: a drone that vanishes from the observation below this HP fraction is dead and forgotten (0 = original: chased and shot for up to 12 s).
-	tweakNpcGoneHP = 0.45
+	tweakNpcGoneHP = 0.0
 	// tweakCubeLevel: in-fight cube detours skip cubes on roofs or decks above our level, which cannot be picked up (false = original).
-	tweakCubeLevel = true
+	tweakCubeLevel = false
 	// tweakNoAirBoost: no boost while airborne outside escape and shell dodging, since boost in the air is a jet climb (false = original).
-	tweakNoAirBoost = true
+	tweakNoAirBoost = false
 	// tweakNpcTie: ties between drones that hit us are broken by distance then id instead of map order (false = original, not reproducible).
-	tweakNpcTie = true
+	tweakNpcTie = false
 )
 
 type tweakSet struct {
