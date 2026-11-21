@@ -72,7 +72,7 @@ const (
 	// the match, exactly as a house bot dying without us already does (0 = original: only such a death switches).
 	// Keeping squad mode after such late deaths (tweakFFAUntil 60) cost about 0.35, so the cautious mode is used late
 	// even in matches where no house bot has died. 265 s is when giddy's own "late" starts (next zone radius 70 m).
-	tweakCautiousT = 0.0
+	tweakCautiousT = 265.0
 	// tweakFinalHold: in the last shrink (radius 25 -> 0 m, 390-415 s, 260 HP/s outside), stay within a tolerance of
 	// its end point that shrinks with the circle (original: anywhere within 2 m once the zone deadline is near).
 	// The end point is the only spot inside until 415 s; each metre off it in the outward direction is up to
