@@ -322,9 +322,10 @@ class MotionController:
             lo, hi = C.BAND_LIGHTNING
         elif kind == "laser":
             lo, hi = C.BAND_LASER
-        elif kind == "mortar":
-            lo, hi = C.BAND_MORTAR
         else:
+            # Gun band for a gun-only mech AND for a mortar holder: the mortar's own
+            # band (70-170 m) kept the bot in the open far from cover, and the mortar
+            # fires from the gun band anyway (it lobs at targets over 45 m).
             lo, hi = C.BAND_GUN
         # Keep out of an enemy lightning's reach unless we're the one holding it
         if kind != "lightning" and "lightning" in (foe.get("weapons") or []):
@@ -612,11 +613,14 @@ class MotionController:
             if near or t - v["t"] > C.LOOT_MAX_AGE_S:
                 del self._loot[key]
 
-    def _loot_goal(self, obs, sx, sy, t, ncx, ncy, nr, zone):
+    def _loot_goal(self, obs, sx, sy, t, ncx, ncy, nr, zone,
+                   allow_crates: bool = True, max_range: Optional[float] = None):
         from combat import should_take_pickup   # local import: avoid a cycle at load time
         me = obs["self"]
         cubes = me.get("cubes", 0)
         rng = C.LOOT_RANGE_EARLY if t < C.LOOT_EARLY_S else C.LOOT_RANGE
+        if max_range is not None:
+            rng = min(rng, max_range)
         zone_soon = zone.get("shrink_start", 1e9) - t < 20.0
         best = None
         for (kind, _id), v in self._loot.items():
@@ -639,7 +643,7 @@ class MotionController:
             else:  # crate
                 # Shooting a crate deals damage and resets regen: not while hurt.
                 hurt = me.get("hp", 1e9) < (me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT) * C.FARM_MIN_HP_FRAC
-                if cubes >= C.STAT_CAP_CUBES or hurt:
+                if cubes >= C.STAT_CAP_CUBES or hurt or not allow_crates:
                     continue
                 score = dist * 1.0 + 10.0
             if best is None or score < best[0]:
@@ -802,6 +806,26 @@ class MotionController:
                 and math.hypot(sx - ncx, sy - ncy) > nr * 0.85):
             d = self._nav_dir(pos, (ncx, ncy), t, budget)
             return self._finish(d, False, False, world, pos, dodge=dodge, mode="recover-rotate")
+
+        # Healing does not need standing still: regen only needs 5 s without DEALING or
+        # TAKING damage. With no enemy remembered nearby, keep picking up what is close:
+        # a supply drop (full heal), and cubes (a kill just dropped some at our feet:
+        # +4 % HP each, healed at once) and wanted weapons. Never crates here: shooting
+        # one deals damage and resets the regen timer.
+        if not enemies:
+            drop = self._drop_goal(obs, enemies, sx, sy, ncx, ncy, nr)
+            if drop is not None:
+                (gx, gy), inside = drop
+                if inside:
+                    return self._finish((0.0, 0.0), False, False, world, pos, dodge=dodge, mode="drop-hold")
+                d = self._nav_dir(pos, (gx, gy), t, budget)
+                return self._finish(d, False, False, world, pos, dodge=dodge, mode="drop")
+            loot = self._loot_goal(obs, sx, sy, t, ncx, ncy, nr, zone,
+                                   allow_crates=False, max_range=C.RECOVER_LOOT_RANGE_M)
+            if loot is not None:
+                (gx, gy), _stop = loot
+                d = self._nav_dir(pos, (gx, gy), t, budget)
+                return self._finish(d, False, False, world, pos, dodge=dodge, mode="loot")
 
         near = min((math.hypot(e["pos"][0] - sx, e["pos"][1] - sy) for e in enemies), default=None)
         if near is not None:

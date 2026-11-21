@@ -473,7 +473,10 @@ def pick_upgrade(offer: dict) -> int:
 # 5. Weapon pickup decision
 # ---------------------------------------------------------------------------
 
-WEAPON_PRIORITY = {"lightning": 3, "laser": 2, "mortar": 1}
+# Mortar is deliberately absent (never picked up): it is beaten by both other
+# specials, useless up close, a laser's cook-off target, and the strong bots in
+# practice skip it. An empty slot 1 costs nothing; the next lightning/laser fills it.
+WEAPON_PRIORITY = {"lightning": 3, "laser": 2}
 
 
 def should_take_pickup(obs: dict, pickup: dict) -> bool:

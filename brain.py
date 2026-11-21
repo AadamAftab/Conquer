@@ -114,9 +114,20 @@ class Brain:
         pos = me["pos"]
         near_d = tracker.nearest_mech_dist(pos[0], pos[1])
 
+        # Is the nearest enemy the more hurt of the two, and do we hold lightning?
+        w_ = me.get("weapons") or [None, None]
+        holds_lightning = len(w_) > 1 and w_[1] is not None and w_[1].get("kind") == "lightning"
+        nearest = tracker.nearest_mech(pos[0], pos[1])
+        winning = (nearest is not None and isinstance(nearest.hp, (int, float))
+                   and nearest.hp / float(nearest.max_hp or 1400.0) < hp / max_hp)
+
         # 2. Health escape: disengage below DISENGAGE_HP_FRAC of max HP while an
-        #    enemy mech is visible (scales with plating / cube HP bonuses)
-        if hp < max_hp * C.DISENGAGE_HP_FRAC and any_visible:
+        #    enemy mech is visible (scales with plating / cube HP bonuses). Never
+        #    from a 1v1 we are winning: finishing a nearly dead enemy is a kill
+        #    (the score), and running gives it a free recovery. With 2+ enemies in
+        #    sight, being ahead of the nearest one does not help, so we still go.
+        if (hp < max_hp * C.DISENGAGE_HP_FRAC and any_visible
+                and (threat_count >= 2 or not winning)):
             self._entered_combat = True
             self._transition(self.DISENGAGE_REGEN)
             return self.state
@@ -126,11 +137,6 @@ class Brain:
         #     Not while we hold lightning (it wants us close: fleeing switches it
         #     off and hands the enemy free shots) and never from a duel we are
         #     winning (the enemy is the more hurt of the two).
-        w_ = me.get("weapons") or [None, None]
-        holds_lightning = len(w_) > 1 and w_[1] is not None and w_[1].get("kind") == "lightning"
-        nearest = tracker.nearest_mech(pos[0], pos[1])
-        winning = (nearest is not None and isinstance(nearest.hp, (int, float))
-                   and nearest.hp / float(nearest.max_hp or 1400.0) < hp / max_hp)
         if (near_d is not None and near_d <= C.PANIC_RANGE
                 and hp < max_hp * C.PANIC_HP_FRAC and not holds_lightning and not winning):
             self._entered_combat = True
