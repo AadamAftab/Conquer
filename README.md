@@ -9,7 +9,7 @@ The submitted image (`Dockerfile`) runs the Go bot in `conquer/`: it is
 used under the MIT License (see `conquer/LICENSE`), taken at commit `70c8b23`. Our changes to it:
 the bot name, an RNG seed salt (`conquer/mech/salt.go`), and optional tweaks behind constants in
 `conquer/mech/tweaks.go` (lose-rule thresholds, finish rush, hearing, rear armor, supply drops,
-free-for-all detection, small fixes), with replay tests in `conquer/mech/tweaks_test.go`. On `main`
+free-for-all detection, mobility boosts, squad targeting weights, end-game zone hold, small fixes), with replay tests in `conquer/mech/tweaks_test.go`. On `main`
 every tweak is off, so the brain plays as `70c8b23`; experiment commits turn some of them on.
 
 ```sh
