@@ -59,6 +59,9 @@ type Brain struct {
 
 	lastHurt    float64
 	hurtBearing float64
+	// tweakHear: last unexplained enemy sound (time, bearing) and the side-step against an unseen laser charge
+	heardAt, heardBearing   float64
+	hearDodgeUntil, hearDodgeX, hearDodgeY float64
 	hurtSeenBy  bool
 
 	lootID    int
@@ -342,6 +345,10 @@ func (b *Brain) observe(o *Obs) {
 		} else if b.pracOn {
 			b.P = squadParams(b.base)
 		}
+	}
+
+	if tweakHear {
+		b.hear(o)
 	}
 
 	z := &o.Zone
@@ -1076,6 +1083,8 @@ func (b *Brain) step(o *Obs, act *Action) {
 			aim[0] = b.npcBearing
 		case now-b.lastHurt < 2.5:
 			aim[0] = b.hurtBearing
+		case tweakHear && b.pracOn && b.heardAt > 0 && now-b.heardAt < 2:
+			aim[0] = b.heardBearing
 		case mx != 0 || my != 0:
 			aim[0] = math.Atan2(my, mx) + 1.15*math.Sin(now*1.3)
 		default:
@@ -1117,6 +1126,15 @@ func (b *Brain) step(o *Obs, act *Action) {
 		break
 	}
 
+	if tweakHear && b.pracOn && now < b.hearDodgeUntil && mode != "unstuck" && mode != "escape" {
+		mx, my = mx*0.4+b.hearDodgeX*0.9, my*0.4+b.hearDodgeY*0.9
+		if l := hyp(mx, my); l > 1 {
+			mx, my = mx/l, my/l
+		}
+		if me.Energy > 25 && me.Grounded {
+			boost = true
+		}
+	}
 	if tw.hopT > 0 && now < tw.hopT && (mx != 0 || my != 0) {
 		mx, my = mx*0.5-my*0.85, my*0.5+mx*0.85
 		act.Jump = true
@@ -1929,6 +1947,41 @@ func (b *Brain) home(o *Obs) (float64, float64, bool) {
 		}
 	}
 	return b.homeXY[0], b.homeXY[1], b.homeSet
+}
+
+// mechSounds: sounds only mechs make (weapons, steps, boosts, jets, reloads).
+var mechSounds = map[string]bool{"gun": true, "mortar": true, "laser_charge": true, "laser": true, "lightning": true, "step": true, "boost": true, "jet": true, "reload": true}
+
+// hear remembers the latest enemy sound that no visible mech explains (within 160 m), and side-steps an unseen laser charge.
+func (b *Brain) hear(o *Obs) {
+	me := &o.Self
+	now := o.T
+	for _, s := range o.Sounds {
+		if !mechSounds[s.Kind] || s.Dist == "far" {
+			continue
+		}
+		explained := false
+		for _, t := range b.tracks {
+			if t.Seen == now && math.Abs(angDiff(math.Atan2(t.Pos[1]-me.Pos[1], t.Pos[0]-me.Pos[0]), s.Bearing)) < 0.35 {
+				explained = true
+				break
+			}
+		}
+		if explained {
+			continue
+		}
+		if at := now - s.Age; at > b.heardAt {
+			b.heardAt, b.heardBearing = at, s.Bearing
+		}
+		if s.Kind == "laser_charge" && now-s.Age > b.hearDodgeUntil-0.8 {
+			side := 1.0
+			if b.rng.Float64() < 0.5 {
+				side = -1
+			}
+			b.hearDodgeX, b.hearDodgeY = -math.Sin(s.Bearing)*side, math.Cos(s.Bearing)*side
+			b.hearDodgeUntil = now + 0.8
+		}
+	}
 }
 
 func (b *Brain) hideFromBearing(o *Obs, seen []*Track, mx, my *float64) bool {
