@@ -236,3 +236,53 @@ func TestSquadStream(t *testing.T) {
 		t.Fatalf("play differs before the squad switch (t=%.1f)", first)
 	}
 }
+
+// TestEndGame: the same match moved to 380-417 s of a practice match (nobody else dies) inside the last zone phase:
+// a 25 m circle holding until 390 s, then shrinking to radius 0 at 415 s on a point 5 m east of us, whose centre
+// starts 15 m east of us. With tweakCautiousT and tweakFinalHold on, squad mode must end at once and we must hold
+// the end point; with the original tweaks neither happens. No panics or bad actions either way.
+func TestEndGame(t *testing.T) {
+	kit := kitDir(t)
+	s := loadStream(t, kit)
+	edit := func(o *Obs) {
+		o.T += 380
+		o.Alive = 16
+		o.Self.HP = math.Max(o.Self.HP, 0.6*o.Self.MaxHP)
+		x, y := o.Self.Pos[0], o.Self.Pos[1]
+		f := clamp((o.T-390)/25, 0, 1)
+		cx, cy := x+15-10*f, y
+		r := 25 * (1 - f)
+		o.Zone = Zone{Center: [2]float64{cx, cy}, Radius: r, NextCenter: [2]float64{x + 5, y}, NextRadius: 0,
+			ShrinkStart: 390, ShrinkEnd: 415, Dps: 260}
+		o.Self.InZone = hyp(x-cx, y-cy) <= r
+	}
+	on := tw
+	on.cautiousT, on.finalHold = 265, true
+	for _, c := range []struct {
+		name string
+		set  tweakSet
+	}{{"original", originalTweaks()}, {"end game on", on}} {
+		r := play(t, kit, s, c.set, edit)
+		final, east := 0, 0
+		for i, m := range r.modes {
+			if m == "final" {
+				final++
+				if r.acts[i].Move[0] > 0 {
+					east++
+				}
+			}
+		}
+		t.Logf("%s: notPractice %v, squad ticks %d, final ticks %d (%d moving east); modes: %s", c.name, r.notPractice,
+			r.squadTicks, final, east, modeCount(r))
+		if c.set.finalHold {
+			if !r.notPractice || r.squadTicks > 1 {
+				t.Fatalf("%s: squad mode not ended by tweakCautiousT (notPractice %v, squad ticks %d)", c.name, r.notPractice, r.squadTicks)
+			}
+			if final == 0 || east*2 < final {
+				t.Fatalf("%s: end point not held (%d final ticks, %d moving east)", c.name, final, east)
+			}
+		} else if r.notPractice || final > 0 {
+			t.Fatalf("%s: end-game code ran with the original tweaks (notPractice %v, final ticks %d)", c.name, r.notPractice, final)
+		}
+	}
+}
