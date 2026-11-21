@@ -18,15 +18,15 @@ const (
 
 	// Squad (practice) parameters, applied by squadParams only.
 	// tweakFinish: range (m) we close to on a weak foe (Params.Finish, 14 = original).
-	tweakFinish = 20.0
+	tweakFinish = 14.0
 	// tweakFinishHP: foe HP fraction under which we close in (Params.FinishHP, 0 = original 0.38).
 	tweakFinishHP = 0.0
 	// tweakFinishRush: boost while closing in on a weak foe more than 2*Finish away with energy > 30 (Params.FinishRush, false = original).
 	tweakFinishRush = false
 	// tweakPursue: chase an engaged foe out of line of sight when its HP fraction is under this (Params.Pursue, 1.01 = original: always).
-	tweakPursue = 0.0
+	tweakPursue = 1.01
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
-	tweakStick = 200.0
+	tweakStick = 120.0
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
 	tweakHear = false
 	// tweakNpcGoneHP: a drone that vanishes from the observation below this HP fraction is dead and forgotten (0 = original: chased and shot for up to 12 s).
@@ -63,9 +63,9 @@ const (
 	tweakBoostHyst = false
 	// Squad targeting (0 = original): tweakHPw weight of foe HP in target choice (0.2), tweakLowBonus bonus for a foe under
 	// 30 % HP (100), tweakLethalK share of the partial-laser damage that must cover the foe's HP to release early (0.8).
-	tweakHPw      = 0.18
-	tweakLowBonus = 200.0
-	tweakLethalK  = 0.7
+	tweakHPw      = 0.0
+	tweakLowBonus = 0.0
+	tweakLethalK  = 0.0
 
 	// End game (practice only).
 	// tweakCautiousT: time (s) from which squad mode gives way to the cautious free-for-all parameters for the rest of
@@ -79,18 +79,18 @@ const (
 	// 25/(25-L) s earlier outside (L = distance the centre still moves), i.e. several hundred HP, and survivors are
 	// then ranked by the order the zone kills them. It holds only in matches confirmed as practice (squad mode on
 	// after 60 s; in free-for-all a death we did not cause always ends squad mode before about 37 s).
-	tweakFinalHold = true
+	tweakFinalHold = false
 	// tweakLeadK: squad mode only, gun lead on mechs. A gun shot leaves on the first tick after the decision when
 	// the cooldown is at most one tick (else on the second) and covers its first 3 m at once, so the bullet reaches
 	// a target d m away (d-3)/speed s after leaving (original: always 0.075 s more). Fighting house bots
 	// strafe and turn back, so they cover only part of v*T: the predicted travel is scaled by this factor
 	// (0 = original lead; in 123 recorded matches 0.8 best centres bullets on them 0.3-0.6 s ahead).
-	tweakLeadK = 0.8
+	tweakLeadK = 0.0
 	// tweakLaserSlew: squad mode only. The torso turns before the beam leaves on the first tick after the release,
 	// so the release and lethal checks allow one tick of turn; the beam leads its target by that tick
 	// (original: 0.125 s); while charging, the aim stays on the gun lead (original: the laser line from 45 % charge
 	// on), and gun shots whose bullet would follow the laser line off the gun lead are held.
-	tweakLaserSlew = true
+	tweakLaserSlew = false
 )
 
 // pracSureT: squad mode still on at this time (s) confirms a practice match (see tweakFFAUntil).
