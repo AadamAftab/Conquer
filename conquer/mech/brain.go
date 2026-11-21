@@ -471,6 +471,17 @@ var upgradeOrderNano = []string{
 
 // upgradeOrderSquad: the laser order with nanites second (tweakNano): hunters come one after another, so the
 // regen between fights is worth more than another armor stack.
+// upgradeOrderMob (tweakMobUp): plating and armor, then speed and boost energy (servos, jets, reactor), then the laser order.
+var upgradeOrderMob = func() []string {
+	out := []string{"plating", "armor", "servos", "jets", "reactor"}
+	for _, u := range upgradeOrderLaser {
+		if u != "plating" && u != "armor" && u != "servos" && u != "jets" && u != "reactor" {
+			out = append(out, u)
+		}
+	}
+	return out
+}()
+
 var upgradeOrderSquad = []string{
 	"plating", "nanites", "armor", "laser_damage", "laser_charge", "gun_damage", "gun_rate", "lightning_efficiency", "lightning_range",
 	"servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "reactor", "capacitor",
@@ -521,6 +532,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 		p := pickUpgrade(o.Offer, b.P.LaserUp, b.P.NanoUp)
 		if tweakNano && b.pracOn && b.P.LaserUp && !b.P.NanoUp {
 			p = pickFrom(o.Offer, upgradeOrderSquad)
+		}
+		if tweakMobUp && b.pracOn && b.P.LaserUp && !b.P.NanoUp {
+			p = pickFrom(o.Offer, upgradeOrderMob)
 		}
 		act.Pick = &p
 	}
@@ -886,6 +900,19 @@ func (b *Brain) step(o *Obs, act *Action) {
 			if lz && me.Energy > 25 {
 				boost = true
 			}
+			if tweakDodgeBoost && b.pracOn && me.Energy > 25 && me.Grounded {
+				boost = true
+			}
+		}
+	}
+	if b.pracOn && me.Grounded && (mx != 0 || my != 0) && mode != "unstuck" && mode != "escape" {
+		charging := laser != nil && laser.Charge > 0
+		if tweakJinkBoost && (mode == "fight" || mode == "cornered") && target != nil && me.Energy > 40 && !charging {
+			// strafe at boost speed in gunfights: harder to lead
+			boost = true
+		}
+		if tweakThreatBoost && me.Energy > 30 && !charging && (target != nil || now-b.lastHurt < 2) {
+			boost = true
 		}
 	}
 

@@ -45,6 +45,15 @@ const (
 	// matches play exactly as before; in practice a late zone or drone death no longer drops the squad settings.
 	// (0 = original: any such death, at any time.)
 	tweakFFAUntil = 0.0
+	// Squad mode only, mobility (boost = 19.5 m/s instead of 11.7 m/s walking; ground only, never while the laser charges):
+	// tweakJinkBoost: boost the fight strafe when a target is visible and energy > 40.
+	tweakJinkBoost = false
+	// tweakDodgeBoost: boost on every bullet or laser dodge when energy > 25 (original: laser dodges only).
+	tweakDodgeBoost = false
+	// tweakThreatBoost: boost whenever moving under threat (a target, or hit in the last 2 s) with energy > 30.
+	tweakThreatBoost = false
+	// tweakMobUp: upgrade order plating, armor, servos, jets, reactor, then the laser order.
+	tweakMobUp = false
 )
 
 type tweakSet struct {
