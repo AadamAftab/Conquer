@@ -92,7 +92,7 @@ export const PP = {
   econHealHp: 0.55,
   /** econ: scale of the mid-fight detours to cubes / weapons (1 = TTUN distances) */
   econDetourCube: 1,
-  econDetourPick: 6,
+  econDetourPick: 1,
   /** econ: weight of the weapon bonus in the out-of-fight loot choice (1 = TTUN) */
   econLootW: 1,
   /** econ: crates (half drop a weapon) - bonus in the loot choice and reach (TTUN: 0 and 150 m) */
