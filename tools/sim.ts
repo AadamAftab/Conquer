@@ -15,6 +15,8 @@ const SEED = Number(process.argv[3] ?? 1)
 const OMNI = process.argv[4] === "1"
 const KIT = process.argv[5] ?? "../mechfight-kit"
 const VERBOSE = process.env.SIMV === "1"
+// house strength 0..1 (aim error, laser share); calibrated so that v1 scores like the real board
+const HARD = Number(process.env.SIMHARD ?? -0.5)
 const lines = gunzipSync(readFileSync(KIT + "/check/stream.jsonl.gz")).toString("utf8").trim().split("\n")
 const HELLO = JSON.parse(lines[0])
 HELLO.map.dir = KIT + "/arena"
@@ -30,7 +32,7 @@ type Mech = Ent & {
   cmdAim: V2; energy: number; spendT: number; grounded: boolean; weapons: (W | null)[]; deathTick: number; cubes: number; armor: number
   lastCombatT: number; seen: Map<number, number>; brain: Brain | null; nav: Navigator | null
   move: V2; boost: boolean; jump: boolean; fire: [boolean, boolean]; skill: number; hunter: boolean; events: any[]; sounds: any[]
-  offer: any; offersPending: number; upgrades: string[]; stats: Record<string, number>; hitByUsT: number
+  offer: any; offersPending: number; upgrades: string[]; stats: Record<string, number>; hitByUsT: number; flipT: number; side: number
 }
 type Npc = Ent & { home: V2; target: number; cd: number; goal: V2 }
 type Shot = { by: number; pos: V3; vel: V3; ttl: number; dmg: number; kind: string }
@@ -90,10 +92,10 @@ function runMatch(seed: number) {
       id: i, kind: "mech", pos, vel: [0, 0, 0], aim: [R() * 6.28 - 3.14, 0], cmdAim: [0, 0], hp: C.mech.hp, maxHp: C.mech.hp, alive: true, radius: C.mech.radius, height: C.mech.height,
       energy: C.mech.energy, spendT: -9, grounded: true, weapons: [mkWeapon("gun"), null], deathTick: 1e9, cubes: 0, armor: 0, lastCombatT: -99, seen: new Map(),
       brain: null, nav: i === 0 ? null : new Navigator(MAP), move: [0, 0], boost: false, jump: false, fire: [false, false], skill, hunter: false, events: [], sounds: [],
-      offer: null, offersPending: 0, upgrades: [], stats: { ...C.mech }, hitByUsT: -99,
+      offer: null, offersPending: 0, upgrades: [], stats: { ...C.mech }, hitByUsT: -99, flipT: 0, side: 1,
     }
     m.cmdAim = [...m.aim] as V2
-    if (i > 0 && R() < 0.25 + skill * 0.6) m.weapons[1] = mkWeapon(R() < 0.6 ? "laser" : "lightning")
+    if (i > 0 && R() < (0.2 + skill * 0.6) * (0.4 + HARD)) m.weapons[1] = mkWeapon(R() < 0.4 + 0.4 * HARD ? "laser" : "lightning")
     mechs.push(m)
   }
   mechs[0].brain = new Brain({ ...HELLO, slot: 0, seed: seed * 7 + 1 })
@@ -119,7 +121,7 @@ function runMatch(seed: number) {
   const drops: { id: number; pos: V3; landT: number; holder: number | null; progress: number; taken: boolean }[] = []
   const times: number[] = []
   let late = 0
-  const st = { byHunter: 0, byOther: 0, byNpc: 0, shots: 0, hits: 0, dealt: 0, taken: 0, zoneDmg: 0, kills: 0, npcKills: 0, crates: 0, cubes: 0, drops: 0, stuck: 0 }
+  const st = { lzShots: 0, lzHits: 0, ltShots: 0, ltHits: 0, byHunter: 0, byOther: 0, byNpc: 0, shots: 0, hits: 0, dealt: 0, taken: 0, zoneDmg: 0, kills: 0, npcKills: 0, crates: 0, cubes: 0, drops: 0, stuck: 0 }
   const stateTicks = new Map<string, number>()
   let squadSeen = { t: -99, pos: [0, 0, 0] as V3 }
   let tick = 0
@@ -206,7 +208,9 @@ function runMatch(seed: number) {
       const tt = rayCyl(muz, dir, o.pos, o.radius, o.height)
       if (tt !== null && tt < bt && tt < w.stats.range) (bt = tt), (best = o)
     }
-    if (best && MAP.los(muz[0], muz[1], muz[2], muz[0] + dir[0] * bt, muz[1] + dir[1] * bt, muz[2] + dir[2] * bt)) damage(best, dmg, m, "laser", m.pos, t)
+    const ok = best && MAP.los(muz[0], muz[1], muz[2], muz[0] + dir[0] * bt, muz[1] + dir[1] * bt, muz[2] + dir[2] * bt)
+    if (m.id === 0) (st.lzShots++, ok && best!.kind === "mech" && st.lzHits++)
+    if (ok) damage(best!, dmg, m, "laser", m.pos, t)
   }
 
   // ---- main loop ----
@@ -241,7 +245,7 @@ function runMatch(seed: number) {
           m.fire = (a.fire as [boolean, boolean]) ?? [false, false]
           if (a.pick !== undefined && m.offer) applyUpgrade(m, m.offer.choices[a.pick]?.id)
           if (a.take !== undefined) take(m, a.take, a.drop)
-        } else houseAct(m, t, Z, me, OMNI ? { t, pos: me.pos } : squadSeen, R)
+        } else houseAct(m, t, Z, me, OMNI || m.hunter ? { t, pos: me.pos } : squadSeen, R)
       }
       for (const n of npcs) if (n.alive) npcAct(n, t)
     }
@@ -333,6 +337,7 @@ function runMatch(seed: number) {
               const d = Math.hypot(o.pos[0] - m.pos[0], o.pos[1] - m.pos[1])
               if (d < w.stats.range && d < bd && Math.abs(angDiff(Math.atan2(o.pos[1] - m.pos[1], o.pos[0] - m.pos[0]), m.aim[0])) < (w.stats.cone_deg / 2) * D2R && MAP.los(muz[0], muz[1], muz[2], o.pos[0], o.pos[1], o.pos[2] + o.height / 2)) (bd = d), (best = o)
             }
+            if (m.id === 0) (st.ltShots++, best && best.kind === "mech" && st.ltHits++)
             if (best) damage(best, w.stats.damage * dmgMul(m), m, "lightning", m.pos, t)
             sound(m.pos, "lightning", m.id)
           }
@@ -530,23 +535,33 @@ function houseAct(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, us: Mech, in
   m.boost = false
   m.jump = false
   // hunters fight on sight; the rest of the squad only answers if we hit them or come very close
-  const provoked = t - m.hitByUsT < 8 || d < 35
+  const provoked = t - m.hitByUsT < 8
   const fightRange = m.hunter ? 180 : provoked ? 120 : 0
   if (iSee && us.alive && d < fightRange) {
-    const s = Math.sin(t * (0.7 + m.skill) + m.id) > 0 ? 1 : -1
+    if (t > (m as any).flipT) ((m as any).flipT = t + 0.4 + R() * 1.2), ((m as any).side = R() < 0.5 ? -1 : 1)
+    const s = (m as any).side ?? 1
     const b = Math.atan2(us.pos[1] - m.pos[1], us.pos[0] - m.pos[0])
-    const radial = m.hunter ? (d > 70 ? 0.7 : d < 25 ? -0.5 : 0.1) : 0
-    m.move = [Math.cos(b) * radial - Math.sin(b) * s * 0.8, Math.sin(b) * radial + Math.cos(b) * s * 0.8]
+    const radial = m.hunter ? (d > 150 ? 0.8 : d > 100 ? 0.35 : d < 40 ? -0.5 : 0) : 0
+    m.move = [Math.cos(b) * radial - Math.sin(b) * s * 0.6, Math.sin(b) * radial + Math.cos(b) * s * 0.6]
     if (blocked(m.pos[0] + m.move[0] * 4, m.pos[1] + m.move[1] * 4, m.pos[2])) m.move = [Math.cos(b) * radial, Math.sin(b) * radial]
-    const tl = d / 252 + 0.05
-    const px = us.pos[0] + us.vel[0] * tl * m.skill, py = us.pos[1] + us.vel[1] * tl * m.skill
-    const err = (1 - m.skill) * 0.04
-    m.cmdAim = [Math.atan2(py - m.pos[1], px - m.pos[0]) + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
-    const onTarget = Math.abs(angDiff(m.cmdAim[0], m.aim[0])) < 0.06
-    m.fire = [onTarget && Math.random() < 0.4 + m.skill * 0.6, false]
     const w1 = m.weapons[1]
-    if (w1?.kind === "laser") m.fire[1] = !((w1.charge ?? 0) >= w1.stats.charge && onTarget)
-    if (w1?.kind === "lightning") m.fire[1] = d < 40 && onTarget
+    const laser = w1?.kind === "laser" ? w1 : null
+    const err = (1 - m.skill) * 0.03 + (1 - HARD) * 0.05
+    if (laser && laser.cooldown <= 0.05) {
+      // hitscan: aim at the body, charge fully, release when on target
+      m.cmdAim = [b + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
+      const onTarget = Math.abs(angDiff(b, m.aim[0])) < 0.02 + err
+      // slower trigger discipline for weaker squads: wait a little longer before releasing
+      const hold = laser.stats.charge * (1 + Math.max(0, -HARD) * 0.8)
+      m.fire = [false, !((laser.charge ?? 0) >= Math.min(hold, laser.stats.charge + laser.stats.hold_s - 0.2) && onTarget)]
+    } else {
+      const tl = d / 252 + 0.05
+      const px = us.pos[0] + us.vel[0] * tl * (0.4 + 0.6 * m.skill), py = us.pos[1] + us.vel[1] * tl * (0.4 + 0.6 * m.skill)
+      m.cmdAim = [Math.atan2(py - m.pos[1], px - m.pos[0]) + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
+      const onTarget = Math.abs(angDiff(m.cmdAim[0], m.aim[0])) < 0.05
+      const fireP = Math.min(1, Math.max(0.2, 0.8 + 0.4 * HARD))
+      m.fire = [onTarget && R() < fireP, w1?.kind === "lightning" && d < 40 && onTarget]
+    }
     return
   }
   let goal: V2
@@ -620,4 +635,4 @@ for (let k = 0; k < N_MATCH; k++) {
   results.push(r)
 }
 const mean = (f: (r: any) => number) => (results.reduce((s, r) => s + f(r), 0) / results.length).toFixed(2)
-console.log(`mean score ${mean((r) => r.score)}  survive ${mean((r) => r.t)}s  kills ${mean((r) => r.kills)}  dealt ${mean((r) => r.dealt)}  taken ${mean((r) => r.taken)} (hunter ${mean((r) => r.byHunter)} other ${mean((r) => r.byOther)} npc ${mean((r) => r.byNpc)})  cubes ${mean((r) => r.cubes)}  late ${mean((r) => r.late)}`)
+console.log(`mean score ${mean((r) => r.score)}  survive ${mean((r) => r.t)}s  kills ${mean((r) => r.kills)}  dealt ${mean((r) => r.dealt)}  taken ${mean((r) => r.taken)} (hunter ${mean((r) => r.byHunter)} other ${mean((r) => r.byOther)} npc ${mean((r) => r.byNpc)})  cubes ${mean((r) => r.cubes)}  late ${mean((r) => r.late)}  acc gun ${(results.reduce((a, r) => a + r.hits, 0) / Math.max(1, results.reduce((a, r) => a + r.shots, 0))).toFixed(2)} laser ${(results.reduce((a, r) => a + r.lzHits, 0) / Math.max(1, results.reduce((a, r) => a + r.lzShots, 0))).toFixed(2)} (${mean((r) => r.lzShots)}/m) lightning ${(results.reduce((a, r) => a + r.ltHits, 0) / Math.max(1, results.reduce((a, r) => a + r.ltShots, 0))).toFixed(2)}`)

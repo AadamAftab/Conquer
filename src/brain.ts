@@ -2,8 +2,9 @@ import { draw, log, type BotAction, type DropObs, type Hello, type Observation, 
 import { GameMap } from "./map.ts"
 import { Navigator } from "./nav.ts"
 import { World, type Track } from "./world.ts"
-import { aimAt, centerOffset, clampPitch, leadAim, missDist, predict, shellLanding, type Aim } from "./combat.ts"
+import { aimAt, centerOffset, clampPitch, hitProb, hitRadius, leadAim, missDist, predict2, shellLanding, type Aim } from "./combat.ts"
 import { planPeek, type PeekPlan } from "./cover.ts"
+import { assess, RP, type Risk } from "./risk.ts"
 import { angDiff, rng, type V2, type V3 } from "./geom.ts"
 
 const UPG_FFA = ["plating", "armor", "nanites", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "sensors", "gyros", "gun_rate", "servos", "jets", "lightning_range", "reactor", "capacitor", "gun_mag", "gun_velocity", "lightning_chain", "laser_pierce"]
@@ -41,6 +42,14 @@ export class Brain {
   peekShots = 0
   state = "init"
   slowTicks = 0
+  evadeUntil = -1
+  cover: V2 | null = null
+  coverT = -99
+  risk: Risk | null = null
+  anchor: V2 = [0, 0]
+  anchorT = 0
+  unstickUntil = -1
+  unstickSide = 1
 
   constructor(hello: Hello) {
     const t0 = performance.now()
@@ -139,13 +148,18 @@ export class Brain {
 
     // ---------- regen / retreat state ----------
     const threatsNear = enemies.filter((e) => dTo(e.pos) < 160 && t - e.seenT < 1).length
-    const lowHp = attackers.size >= 2 || threatsNear >= 2 ? 0.65 : 0.5
+    const lowHp = attackers.size >= 2 || threatsNear >= 2 ? RP.regenLowMulti : RP.regenLow
     const justKilled = obs.events.some((ev) => ev.type === "kill") || t - this.lastKillT < 3
     if (obs.events.some((ev) => ev.type === "kill")) this.lastKillT = t
     // a nearly dead target is worth finishing before breaking off
     const finishing = T !== null && engage && T.hp / Math.max(1, T.maxHp) < 0.2 && T.hp < me.hp * 0.5
     if (!this.regen && !finishing && ((hpFrac < lowHp && (hitRecently || nearestD < 120)) || (justKilled && hpFrac < 0.75))) this.regen = true
     if (this.regen && (hpFrac > 0.9 || (t - w.lastHurtT > 10 && hpFrac > 0.75 && nearestD > 140))) this.regen = false
+    // risk: never stay in a losing trade or under several guns
+    const cfg = this.hello.config
+    const risk = (this.risk = assess(m, w, me, x, y, engage ? T : null, cfg, this.perCube))
+    if (engage && !finishing && risk.level === "danger") this.evadeUntil = Math.max(this.evadeUntil, t + RP.evadeDur)
+    const evading = t < this.evadeUntil
 
     // ---------- movement / mode ----------
     let mv: V2 = [0, 0]
@@ -188,21 +202,24 @@ export class Brain {
       const d = dTo(T.pos)
       const brawlD = iLight >= 0 && me.energy > 25 ? 38 : 26
       shootT = T
-      if (this.regen) {
-        // break line of sight from every threat and heal
-        this.state = "regen"
+      if (this.regen || evading) {
+        // break line of sight from every threat (and heal)
+        this.state = this.regen ? "regen" : "evade"
         this.replan(x, y, rq, comp, myComp, enemies, T, scale, t, zoneOk, 0.5)
         const hide = this.plan?.hide
         if (hide && !(this.plan!.hiddenNow && Math.hypot(hide[0] - x, hide[1] - y) < 1.5)) {
           const r = go(hide[0], hide[1])
           mv = r.dir
-          if (!r.arrived && hitRecently) boost = me.energy > 20
+          if (!r.arrived && (hitRecently || evading)) boost = me.energy > 20
         } else if (!hide) mv = this.jink(x, y, T, rq, t, 0.9, -0.8)
-        // shoot back only if it is in our face
-        gunOk = d < 60 && hitRecently
-        lightOk = d < 40
-        laserMode = iLaser >= 0 && this.plan?.hiddenNow ? "charge" : "off"
-      } else if (d < brawlD) {
+        // healing only starts after regen_delay s without taking (or dealing) damage: while we are
+        // being hit anyway, firing back costs nothing
+        const regenBlocked = t - w.lastHurtT < (me.stats.regen_delay ?? 5)
+        const settled = !hide || this.plan!.hiddenNow
+        gunOk = regenBlocked
+        lightOk = regenBlocked
+        laserMode = iLaser < 0 ? "off" : regenBlocked && settled ? "shoot" : this.plan?.hiddenNow ? "charge" : "off"
+      } else if (d < brawlD && (risk.adv > RP.brawlAdv || finishing)) {
         this.state = "brawl"
         mv = this.brawlMove(x, y, T, iLight >= 0 && me.energy > 25, rq, t)
         gunOk = true
@@ -212,14 +229,24 @@ export class Brain {
         this.replan(x, y, rq, comp, myComp, enemies, T, scale, t, zoneOk, 0.35)
         const P = this.plan!
         if (!P.hide || !P.peek) {
-          // nowhere to hide nearby: strafe at range
+          // nowhere to hide nearby: strafe at range if we win the trade, else head for farther cover
           this.state = "open"
           mv = this.fightMove(x, y, T, iLight >= 0 && me.energy > 30, iLaser >= 0, rq, t, hpFrac)
+          if (risk.level === "risky" && !finishing) {
+            if (!this.cover || t - this.coverT > 1) (this.cover = this.findCover(x, y, T.pos, rq, t)), (this.coverT = t)
+            if (this.cover) {
+              this.state = "to-cover"
+              mv = go(this.cover[0], this.cover[1]).dir
+            }
+          }
           gunOk = true
           lightOk = true
           laserMode = "shoot"
         } else {
-          const r = this.peekStep(obs, x, y, T, P, iGun, iLaser, me.hp, t)
+          // stepping out must be a trade we win
+          const pk = assess(m, w, me, P.peek[0], P.peek[1], T, cfg, this.perCube)
+          const okOut = finishing || (pk.ttd > RP.outTtd && pk.adv > RP.outAdv)
+          const r = this.peekStep(obs, x, y, T, P, iGun, iLaser, me.hp, t, okOut)
           this.state = "peek-" + this.peekPhase
           const dest = r.dest
           if (Math.hypot(dest[0] - x, dest[1] - y) > 1.2) {
@@ -228,7 +255,8 @@ export class Brain {
               mv = [(dest[0] - x) / dl, (dest[1] - y) / dl]
             } else mv = go(dest[0], dest[1]).dir
           }
-          gunOk = this.peekPhase === "out"
+          // hit while "hidden": someone sees us anyway, so shooting back is free
+          gunOk = this.peekPhase === "out" || (t - w.lastHurtT < 1.5 && P.shotNow)
           lightOk = true
           laserMode = r.laser
         }
@@ -242,6 +270,14 @@ export class Brain {
         this.replan(x, y, rq, comp, myComp, enemies, near, scale, t, zoneOk, 0.6)
         const hide = this.plan?.hide
         if (hide && !this.plan!.hiddenNow) mv = go(hide[0], hide[1]).dir
+        else if (!hide) mv = this.jink(x, y, near, rq, t, 0.8, -0.7)
+      }
+      // shot by someone we cannot see: do not stand still
+      const h = w.hurt.length ? w.hurt[w.hurt.length - 1] : null
+      if (h && t - h.t < 1.5 && Math.hypot(mv[0], mv[1]) < 0.1) {
+        const b = h.bearing ?? this.scanYaw
+        const ghost = { ...(near ?? ({} as Track)), pos: [x + Math.cos(b) * 60, y + Math.sin(b) * 60, z] as V3 } as Track
+        mv = this.jink(x, y, ghost, rq, t, 0.8, -0.7)
       }
       if (iLaser >= 0) laserMode = "charge"
     } else if ((drop = this.dropGoal(obs, x, y, t, enemies, hpFrac))) {
@@ -284,6 +320,18 @@ export class Brain {
       if (T && !engage && dTo(T.pos) < 120) speedCap = Math.min(speedCap, 0.4)
     }
     if (this.state !== "peek-hide" && this.state !== "peek-out") this.peekPhase = "hide"
+    // generic unstick: wanting to move but not moving
+    if (Math.hypot(x - this.anchor[0], y - this.anchor[1]) > 1) (this.anchor = [x, y]), (this.anchorT = t)
+    else if (Math.hypot(mv[0], mv[1]) > 0.5 && t - this.anchorT > 1.5) {
+      this.unstickUntil = t + 0.7
+      this.unstickSide = this.rnd() < 0.5 ? -1 : 1
+      this.anchorT = t
+    }
+    if (t < this.unstickUntil) {
+      const s = this.unstickSide
+      mv = [mv[0] * 0.3 - mv[1] * s, mv[1] * 0.3 + mv[0] * s]
+      jump = true
+    }
     const ml = Math.hypot(mv[0], mv[1])
     if (ml > speedCap) mv = [(mv[0] / ml) * speedCap, (mv[1] / ml) * speedCap]
 
@@ -342,7 +390,7 @@ export class Brain {
     // ---------- debug ----------
     const ms = performance.now() - T0
     if (ms > 25) this.slowTicks++
-    draw.label(`${this.state} ${w.mode[0]} hp${Math.round(hpFrac * 100)} e${Math.round(me.energy)} ${shootT ? "→" + shootT.id : ""} ${ms.toFixed(0)}ms`)
+    draw.label(`${this.state} ${w.mode[0]} ${risk.level[0]}${risk.adv < 9 ? risk.adv.toFixed(1) : ""} hp${Math.round(hpFrac * 100)} e${Math.round(me.energy)} ${shootT ? "→" + shootT.id : ""} ${ms.toFixed(0)}ms`)
     if (shootT) draw.line(muz, [shootT.pos[0], shootT.pos[1], shootT.pos[2] + 4], "#ff4040")
     if (this.plan && t - this.plan.t < 1) {
       if (this.plan.hide) draw.point([this.plan.hide[0], this.plan.hide[1], z + 1], "#40ff60", 5)
@@ -373,18 +421,29 @@ export class Brain {
 
   private replan(x: number, y: number, rq: number, comp: Int32Array, myComp: number, enemies: Track[], T: Track, scale: number, t: number, zoneOk: (px: number, py: number) => boolean, every: number) {
     const P = this.plan
-    if (P && P.tid === T.id && t - P.t < every) return
-    // the threats that matter: target + nearest others
-    const threats = enemies
-      .filter((e) => this.w.t - e.seenT < 0.5 && Math.hypot(e.pos[0] - x, e.pos[1] - y) < 230)
-      .sort((a, b) => Math.hypot(a.pos[0] - x, a.pos[1] - y) - Math.hypot(b.pos[0] - x, b.pos[1] - y))
-      .slice(0, 4)
+    // we thought we were hidden but got hit: the plan is wrong, redo it now
+    const fooled = P && P.hiddenNow && t - this.w.lastHurtT < 0.25
+    if (P && P.tid === T.id && t - P.t < every && !fooled) return
+    // the threats that matter: target + nearest recently known mechs + unseen shooters by bearing
+    const w = this.w
+    const known: Track[] = []
+    for (const e of w.tracks.values()) if (e.kind === "mech" && t - e.seenT < 4 && Math.hypot(e.pos[0] - x, e.pos[1] - y) < 230) known.push(e)
+    known.sort((a, b) => Math.hypot(a.pos[0] - x, a.pos[1] - y) - Math.hypot(b.pos[0] - x, b.pos[1] - y))
+    const threats = known.slice(0, 4)
     if (!threats.includes(T)) threats.unshift(T)
+    const z = this.m.surfAt(x, y)
+    for (const h of w.hurt) {
+      if (t - h.t > 2 || h.bearing === null || h.weapon === "npc") continue
+      const tr = h.by !== null ? w.tracks.get(h.by) : undefined
+      if (tr && t - tr.seenT < 1) continue
+      threats.push({ ...T, id: -1, pos: [x + Math.cos(h.bearing) * 70, y + Math.sin(h.bearing) * 70, z], cubes: 0 })
+      break
+    }
     this.plan = planPeek(this.m, x, y, rq, comp, myComp, threats, T, scale, this.perCube, t, zoneOk)
   }
 
   /** One step of the peek cycle: hide (charge / reload / heal), step out, shoot, hide again. */
-  private peekStep(obs: Observation, x: number, y: number, T: Track, P: PeekPlan, iGun: number, iLaser: number, hp: number, t: number): { dest: V2; laser: LaserMode } {
+  private peekStep(obs: Observation, x: number, y: number, T: Track, P: PeekPlan, iGun: number, iLaser: number, hp: number, t: number, okOut: boolean): { dest: V2; laser: LaserMode } {
     const me = obs.self
     const hide = P.hide!, peek = P.peek!
     const L = iLaser >= 0 ? me.weapons[iLaser]! : null
@@ -397,8 +456,11 @@ export class Brain {
       if (L && L.cooldown <= 0.05 && charge >= full - 0.05) ready = true
       if (!L && G && (G.ammo ?? 0) >= 4 && !(G.reload ?? 0) && G.cooldown <= 0) ready = true
       if (L && G && L.cooldown > 0.3 && (G.ammo ?? 0) >= 4 && !(G.reload ?? 0)) ready = true
-      // do not sit forever: a hunter walking around our cover will find us anyway
-      if (atHide && ready && t - this.peekSince > 0.4) {
+      // a laser carrier holding a charge is waiting for us to show: let it fire first (it auto-fires
+      // after hold_s), then step out during its cooldown
+      const theyFiredRecently = t - T.laserT < 1.3
+      const waitLaser = T.weapons.includes("laser") && T.charging && !theyFiredRecently && t - this.peekSince < 3.5
+      if (atHide && ready && okOut && !waitLaser && t - this.peekSince > 0.4) {
         this.peekPhase = "out"
         this.peekSince = t
         this.peekHp = hp
@@ -411,7 +473,10 @@ export class Brain {
     const hurt = this.peekHp - hp
     const laserDone = L ? charge === 0 && L.cooldown > 0.2 && out > 0.15 : true
     const gunDone = G ? (G.ammo ?? 0) === 0 || (G.reload ?? 0) > 0 : true
-    const done = (L ? laserDone && (out > 0.9 || gunDone) : gunDone || out > 1.6) || out > 2.6 || hurt > 220
+    // their laser is charging at us and ours is not about to fire: duck back now
+    const ourReady = L ? charge >= full - 0.05 && L.cooldown <= 0.05 : false
+    const danger = T.charging && this.aimedAtUs(T, x, y, 0.15) && !ourReady
+    const done = (L ? laserDone && (out > 0.9 || gunDone) : gunDone || out > 1.6) || out > 2.6 || hurt > 220 || danger
     if (done) {
       this.peekPhase = "hide"
       this.peekSince = t
@@ -421,15 +486,18 @@ export class Brain {
   }
 
   /** Aim and triggers against `tr`. */
-  private fireControl(me: SelfObs, muz: V3, tr: Track, iGun: number, iLaser: number, iLight: number, laserMode: LaserMode, gunOk: boolean, lightOk: boolean, allowed: boolean, t: number): { aim: Aim; fire: [boolean, boolean]; reload: boolean } {
+  private fireControl(me: SelfObs, muz0: V3, tr: Track, iGun: number, iLaser: number, iLight: number, laserMode: LaserMode, gunOk: boolean, lightOk: boolean, allowed: boolean, t: number): { aim: Aim; fire: [boolean, boolean]; reload: boolean } {
     const m = this.m
     const slots = me.weapons
     const turn = me.stats.turn_rate ?? 4
+    const LAT = 0.05
+    // where our muzzle will be when the shot leaves (bullets do not inherit our velocity)
+    const muz: V3 = [muz0[0] + me.vel[0] * LAT, muz0[1] + me.vel[1] * LAT, muz0[2] + me.vel[2] * LAT]
     const off = centerOffset(tr, this.perCube)
-    const pNow = predict(m, tr, 0.075, this.g)
-    const direct = aimAt(muz, [pNow[0], pNow[1], pNow[2] + off])
+    const radius = hitRadius(tr, this.perCube)
+    const pr = predict2(m, tr, LAT, this.g)
+    const direct = aimAt(muz, [pr.p[0], pr.p[1], pr.p[2] + off], pr.sigma)
     const d = direct.dist
-    const radius = tr.kind === "npc" ? 1.5 : 2.5 * (1 + this.perCube * tr.cubes)
     const los = m.los(muz[0], muz[1], muz[2], direct.pt[0], direct.pt[1], direct.pt[2])
     const fire: [boolean, boolean] = [false, false]
     let aim = direct
@@ -447,7 +515,9 @@ export class Brain {
       } else if (laserMode === "shoot" && allowed) {
         if (charge > 0) {
           laserBusy = true
-          const ok = d <= range && los && missDist(me, direct, 0.05) < radius * 0.7
+          // hitscan: release only when the beam will land (aim after slew + target drift over one tick)
+          const p = hitProb(missDist(me, direct, LAT), direct.sigma, radius)
+          const ok = d <= range && los && p > 0.8
           fire[iLaser] = !((charge >= full - 0.02 && ok) || left < 0.2)
         } else if (L.cooldown <= 0.05 && d <= range * 0.97 && los && !this.shortRisk(tr, d)) {
           fire[iLaser] = true
@@ -461,24 +531,52 @@ export class Brain {
       const range = L.stats.range ?? 45
       const half = (((L.stats.cone_deg ?? 30) * Math.PI) / 180) * 0.5
       const reserve = tr.kind === "npc" || tr.hp / tr.maxHp < 0.25 ? 6 : 18
-      if (d < range * 0.9 && me.energy > reserve) {
+      if (d < range * 0.92 && me.energy > reserve) {
         lightningOn = true
-        const ey = Math.abs(angDiff(direct.yaw, me.aim[0])) - turn * 0.05
-        if (L.cooldown <= 0 && ey < half * 0.6 && los) fire[iLight] = true
+        // the arc takes the nearest thing in the cone: steer the cone off nearer drones/crates
+        const yaw = this.lightningYaw(muz, tr, direct.yaw, d, half)
+        if (yaw !== null) {
+          aim = { ...direct, yaw }
+          const ey = Math.abs(angDiff(yaw, me.aim[0])) - turn * LAT
+          if (L.cooldown <= 0 && ey < half * 0.55 && los) fire[iLight] = true
+        }
       }
     }
     if (iGun >= 0) {
       const G = slots[iGun]!
-      const lead = leadAim(m, muz, tr, G.stats.speed ?? 252, 0.075, off, this.g)
+      const lead = leadAim(m, muz, tr, G.stats.speed ?? 252, LAT, off, this.g)
       if (!laserBusy && !lightningOn) aim = lead
       const ammo = G.ammo ?? 1
       const okRange = lead.dist <= (G.stats.range ?? 230) * 0.98
       const laserOk = !laserBusy || d < 40
-      if (gunOk && allowed && G.cooldown <= 0 && ammo > 0 && !(G.reload ?? 0) && okRange && laserOk && los && missDist(me, lead, 0.05) < radius * 0.75) fire[iGun] = true
+      const spread = (((G.stats.spread_deg ?? 0.6) * Math.PI) / 180) * lead.dist
+      const p = hitProb(missDist(me, lead, LAT), Math.hypot(lead.sigma, spread), radius + 0.3)
+      const need = tr.kind === "npc" ? 0.2 : 0.3
+      const gunLos = m.los(muz[0], muz[1], muz[2], lead.pt[0], lead.pt[1], lead.pt[2])
+      if (gunOk && allowed && G.cooldown <= 0 && ammo > 0 && !(G.reload ?? 0) && okRange && laserOk && gunLos && p > need) fire[iGun] = true
       if (ammo === 0 && !(G.reload ?? 0)) reload = true
       if (!gunOk && ammo < (G.stats.mag ?? 12) * 0.5 && !(G.reload ?? 0)) reload = true
     }
     return { aim, fire, reload }
+  }
+
+  /** A yaw that keeps `tr` in the lightning cone but nearer drones, crates and mechs out of it. */
+  private lightningYaw(muz: V3, tr: Track, yaw0: number, d: number, half: number): number | null {
+    const w = this.w
+    const blockers: [number, number][] = []
+    const add = (x: number, y: number, id: number) => {
+      if (id === tr.id) return
+      const bd = Math.hypot(x - muz[0], y - muz[1])
+      if (bd < d) blockers.push([Math.atan2(y - muz[1], x - muz[0]), bd])
+    }
+    for (const e of w.tracks.values()) if (e.seenT === w.t) add(e.pos[0], e.pos[1], e.id)
+    for (const c of w.crates.values()) add(c.pos[0], c.pos[1], c.id)
+    if (!blockers.length) return yaw0
+    for (const off of [0, 0.35, -0.35, 0.6, -0.6, 0.8, -0.8]) {
+      const y = yaw0 + off * half
+      if (blockers.every(([b]) => Math.abs(angDiff(b, y)) > half * 1.05)) return y
+    }
+    return null
   }
 
   /** Is this target holding lightning close enough to short our laser? */
@@ -492,7 +590,7 @@ export class Brain {
     if (tr) return tr.seenT === this.w.t ? tr : null
     const c = this.w.crates.get(id)
     if (!c) return null
-    return { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: this.w.t, firstT: 0, hitUsT: -99, hitByUsT: -99 }
+    return { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: this.w.t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [] }
   }
 
   /** Should we take a weapon of this kind? (and which slot to drop) */
@@ -674,11 +772,46 @@ export class Brain {
       const l = Math.hypot(dx, dy) || 1
       dx /= l
       dy /= l
-      if (this.m.walkLine(x, y, x + dx * 5, y + dy * 5, this.nav.rq) && this.w.zoneMargin(x + dx * 8, y + dy * 8, t + 3) > 5) return [dx, dy]
+      if (this.m.walkLine(x, y, x + dx * 5, y + dy * 5, this.nav.rq) && this.w.zoneMargin(x + dx * 8, y + dy * 8, t + 3) > 3) return [dx, dy]
       this.jinkSign = -this.jinkSign
     }
-    if (radial !== 0 && this.m.walkLine(x, y, x + rx * radial * 5, y + ry * radial * 5, this.nav.rq)) return [rx * Math.sign(radial), ry * Math.sign(radial)]
-    return [0, 0]
+    // never freeze under fire: best walkable direction, preferring sideways and staying in the zone
+    let best: V2 = [0, 0]
+    let bs = -Infinity
+    const want = Math.atan2(ry * radial + rx * this.jinkSign, rx * radial - ry * this.jinkSign)
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2
+      const dx = Math.cos(a), dy = Math.sin(a)
+      if (!this.m.walkLine(x, y, x + dx * 5, y + dy * 5, this.nav.rq)) continue
+      const sc = -Math.abs(angDiff(a, want)) + this.w.zoneMargin(x + dx * 8, y + dy * 8, t + 3) * 0.05
+      if (sc > bs) (bs = sc), (best = [dx, dy])
+    }
+    return best
+  }
+
+  /** A reachable point up to 45 m away, hidden from `threat`, inside the zone. */
+  private findCover(x: number, y: number, threat: V3, rq: number, t: number): V2 | null {
+    const m = this.m, w = this.w
+    const comp = m.comp(rq)
+    const s = m.snap(x, y, rq, -1, 4)
+    const myComp = s >= 0 ? comp[s] : -1
+    let best: V2 | null = null
+    let bs = -Infinity
+    const tz = threat[2] + 8
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2
+      for (const r of [10, 20, 32, 45]) {
+        const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r
+        const n = m.nodeOf(px, py)
+        if (!m.passable(n, rq) || (myComp >= 0 && comp[n] !== myComp)) continue
+        if (w.zoneMargin(px, py, t + 8) < 5) continue
+        const hidden = !m.los(threat[0], threat[1], tz, px, py, m.surfAt(px, py) + 5)
+        let sc = (hidden ? 60 : 0) + 0.25 * Math.hypot(px - threat[0], py - threat[1]) - 0.6 * r
+        if (!m.walkLine(x, y, px, py, rq)) sc -= 12
+        if (sc > bs) (bs = sc), (best = [px, py])
+      }
+    }
+    return best
   }
 
   /** Move away from a mortar shell about to land near us. */

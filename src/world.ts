@@ -20,6 +20,10 @@ export type Track = {
   hitUsT: number
   /** last time we damaged it */
   hitByUsT: number
+  /** last time we saw or felt it fire its laser */
+  laserT: number
+  /** recent horizontal velocities (t, vx, vy), newest last, ~2 s */
+  hist: [number, number, number][]
 }
 
 export type Pickup = { id: number; kind: WeaponKind; pos: V3; seenT: number }
@@ -58,7 +62,7 @@ export class World {
     for (const a of obs.mechs) {
       let tr = this.tracks.get(a.id)
       if (!tr) {
-        tr = { id: a.id, kind: a.kind, pos: a.pos, vel: a.vel, aim: a.aim, hp: a.hp ?? 1, maxHp: a.max_hp ?? 1, cubes: a.cubes ?? 0, weapons: a.weapons ?? [], charging: !!a.charging, seenT: t, firstT: t, hitUsT: -99, hitByUsT: -99 }
+        tr = { id: a.id, kind: a.kind, pos: a.pos, vel: a.vel, aim: a.aim, hp: a.hp ?? 1, maxHp: a.max_hp ?? 1, cubes: a.cubes ?? 0, weapons: a.weapons ?? [], charging: !!a.charging, seenT: t, firstT: t, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [] }
         this.tracks.set(a.id, tr)
       }
       tr.pos = a.pos
@@ -70,6 +74,8 @@ export class World {
       if (a.weapons) tr.weapons = a.weapons
       tr.charging = !!a.charging
       tr.seenT = t
+      tr.hist.push([t, a.vel[0], a.vel[1]])
+      while (tr.hist.length && t - tr.hist[0][0] > 2.05) tr.hist.shift()
     }
     for (const ev of obs.events) {
       switch (ev.type) {
@@ -79,7 +85,10 @@ export class World {
           this.hurt.push({ t, amount: ev.amount, bearing: ev.bearing, by: ev.by, weapon: ev.weapon, rear: !!ev.rear })
           if (ev.by !== null) {
             const tr = this.tracks.get(ev.by)
-            if (tr) tr.hitUsT = t
+            if (tr) {
+              tr.hitUsT = t
+              if (ev.weapon === "laser") tr.laserT = t
+            }
           }
           break
         }
@@ -131,6 +140,11 @@ export class World {
       if (seenC.has(id)) continue
       const d = Math.hypot(c.pos[0] - ex, c.pos[1] - ey)
       if (d < 30 && this.m.los(ex, ey, ez, c.pos[0], c.pos[1], c.pos[2] + 1.2)) this.crates.delete(id)
+    }
+    for (const b of obs.beams) {
+      if (b.kind !== "laser") continue
+      const tr = this.tracks.get(b.by)
+      if (tr) tr.laserT = t - b.age
     }
     for (const s of obs.sounds) this.heard.push({ t: t - s.age, kind: s.kind, bearing: s.bearing, dist: s.dist })
     this.heard = this.heard.filter((h) => t - h.t < 4)
