@@ -355,6 +355,10 @@ class MotionController:
         fx, fy = foe["pos"][0], foe["pos"][1]
         dist = math.hypot(fx - sx, fy - sy)
         lo, hi = band if band is not None else self._band(me, foe)
+        foe_hp = foe.get("hp")
+        finishing = foe_hp is not None and isinstance(foe_hp, (int, float)) and foe_hp < 350.0
+        if finishing:
+            lo, hi = (10.0, 18.0)
         ux, uy = _unit(fx - sx, fy - sy)          # toward foe
 
         weapons = me.get("weapons", [None, None])
@@ -483,7 +487,8 @@ class MotionController:
         boost = grounded and not charging and (
             energy > C.STRAFE_BOOST_ENERGY
             or (urgent and energy > C.DODGE_BOOST_ENERGY)
-            or (radial < -0.5 and energy > 30.0))
+            or (radial < -0.5 and energy > 30.0)
+            or (finishing and dist > 18.0 and energy > 20.0))
         return self._finish(d, boost, False, world, pos, dodge=dodge, mode="strafe",
                             flip_on_block=True)
 

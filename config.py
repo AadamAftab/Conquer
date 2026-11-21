@@ -182,7 +182,7 @@ NAV_GOAL_MOVE_M: float = 10.0    # restart the search when the goal moves this f
 # Closer than before: the squad's bots are beaten at close range (lightning 22 m,
 # gun ~40 m, laser ~55 m is what the stronger bots in practice hold).
 BAND_GUN: tuple       = (30.0, 55.0)
-BAND_LASER: tuple     = (45.0, 75.0)
+BAND_LASER: tuple     = (110.0, 180.0)
 BAND_MORTAR: tuple    = (70.0, 170.0)
 BAND_LIGHTNING: tuple = (10.0, 28.0)
 BAND_NPC: tuple       = (20.0, 45.0)
@@ -269,7 +269,7 @@ LASER_ENGAGE_RANGE: float  = 270.0 # m — laser has extra range; prefer laser e
 # shares vision and hunts the weakest. Stay out of fights early: loot, take a
 # drop, rotate. Engage only after this many seconds, when hurt enough to be
 # forced into it, or once combat has already started.
-OPENING_CALM_S: float      = 0.0   # 0 = no calm: the active bots in practice fight from t=0
+OPENING_CALM_S: float      = 15.0  # 15s quiet scout phase: loot cubes & weapons without loud gunshots
 # Above this many mechs alive we still accept an outnumbered fight as a reason
 # to break off; below it the circle is small and hiding is no longer an option.
 LATE_GAME_ALIVE: int       = 6
@@ -342,31 +342,28 @@ MORTAR_MIN_RANGE: float    = 15.0  # m — don't mortar yourself
 # Listed from highest to lowest priority. The bot picks the first item in this
 # list that appears among the offered choices.
 UPGRADE_PRIORITY: List[str] = [
-    # Survive first, then the weapons we actually build around (gun + lightning),
-    # then the rest. Offers only list upgrades for weapons we hold, so the order
-    # among weapon upgrades only matters when the offer mixes them.
     "plating",         # +15% max HP (×3) — raw health pool
-    "lightning_efficiency", # -35% energy / +10% dmg (×2): 100 energy lasts ~12 s of lightning, not ~8
     "armor",           # -8% dmg taken (×3) — survivability
-    "nanites",         # +60% regen, -1.5s delay (×2) — fast recovery
-    "capacitor",       # +30 max energy (×3): a longer lightning burst and more dodge fuel
-    "gyros",           # +30% turn rate (×2) — aim slew speed (more shots land)
-    "gun_damage",      # +15% gun dmg (×3) — sustained DPS
-    "lightning_chain", # +1 chain hop (×2) — shreds a squad that bunches up
-    "reactor",         # +30% energy regen (×3)
     "laser_damage",    # +18% laser dmg (×3) — alpha damage
-    "gun_rate",        # +15% fire rate (×3) — cyclic DPS
-    "servos",          # +8% move/boost speed (×3) — kite speed
-    "gun_mag",         # +8 mag / -20% reload (×2) — ammo uptime
     "laser_charge",    # -25% charge time (×2) — faster shots
+    "nanites",         # +60% regen, -1.5s delay (×2) — fast recovery
+    "gun_damage",      # +15% gun dmg (×3) — sustained DPS
+    "gun_rate",        # +15% fire rate (×3) — cyclic DPS
+    "lightning_efficiency", # -35% energy / +10% dmg (×2)
+    "capacitor",       # +30 max energy (×3)
+    "gyros",           # +30% turn rate (×2)
+    "lightning_chain", # +1 chain hop (×2)
+    "reactor",         # +30% energy regen (×3)
+    "servos",          # +8% move/boost speed (×3)
+    "gun_mag",         # +8 mag / -20% reload (×2)
     "lightning_range", # +20% range/cone (×2)
     "jets",            # -25% boost/jet drain (×2)
     "sensors",         # +15m prox / +25m vision / half noise (×2)
-    "gun_velocity",    # +25% speed / +15% range (×2) — leading easier
-    "mortar_reload",   # -18% mortar cooldown (×3) — fire rate
-    "mortar_splash",   # +30% splash radius (×2) — area control
-    "mortar_velocity", # +20% shell speed (×2) — shorter flight time
-    "laser_pierce",    # through 1 extra target (×1) — late-game
+    "gun_velocity",    # +25% speed / +15% range (×2)
+    "laser_pierce",    # through 1 extra target (×1)
+    "mortar_reload",
+    "mortar_splash",
+    "mortar_velocity",
 ]
 
 # ---------------------------------------------------------------------------

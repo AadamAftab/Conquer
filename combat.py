@@ -473,10 +473,9 @@ def pick_upgrade(offer: dict) -> int:
 # 5. Weapon pickup decision
 # ---------------------------------------------------------------------------
 
-# Mortar is deliberately absent (never picked up): it is beaten by both other
-# specials, useless up close, a laser's cook-off target, and the strong bots in
-# practice skip it. An empty slot 1 costs nothing; the next lightning/laser fills it.
-WEAPON_PRIORITY = {"lightning": 3, "laser": 2}
+# Laser leads: out-ranges house bots (280m), delivers 504 cook-off dmg vs mortars.
+# Lightning is secondary (close-quarters). Mortar is 100% banned (never picked up).
+WEAPON_PRIORITY = {"laser": 4, "lightning": 3}
 
 
 def should_take_pickup(obs: dict, pickup: dict) -> bool:
