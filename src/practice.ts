@@ -108,6 +108,11 @@ export const PP = {
   lateEvadeT: 0,
   /** econ: upgrade order override (empty = survival-first TTUN order) */
   econUpg: [] as string[],
+  /** econ: close in to this distance to finish a target below econFinishHp (0 = off) */
+  econFinishR: 0,
+  econFinishHp: 0.38,
+  /** econ: release a partly charged laser when 80% of its damage already kills the target */
+  econLethal: false,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */

@@ -222,7 +222,12 @@ export class Econ {
         if (me.energy > 15) boost = true
       } else {
         const lightning = iLight >= 0
-        const prefer = lightning ? PP.econLight : iLaser >= 0 ? PP.econLaser : PP.econGun
+        let prefer = lightning ? PP.econLight : iLaser >= 0 ? PP.econLaser : PP.econGun
+        // finish a weak target up close
+        if (PP.econFinishR > 0 && !this.ffa && tFrac < PP.econFinishHp && hpFrac > 0.42 && threats <= 2) {
+          prefer = PP.econFinishR
+          if (d > 2 * PP.econFinishR && me.energy > 30) boost = true
+        }
         let radial = 0
         if (d > prefer + 15) {
           radial = 1
@@ -478,6 +483,13 @@ export class Econ {
       if (charge > 0) {
         const aligned = seen && hasLos && yawErr(direct) < 0.9 * tol && Math.abs(direct.pitch - me.aim[1]) < 1.5 * tol + 0.02
         fire[iLaser] = !(charge >= full - 0.05 && aligned)
+        if (PP.econLethal && aligned && charge >= (L.stats.min_charge ?? 0.15) && charge < full - 0.05) {
+          const cfgC = this.h.hello.config.cubes
+          const frac = (L.stats.min_frac ?? 0.35) + (1 - (L.stats.min_frac ?? 0.35)) * (charge / full)
+          let dmg = (L.stats.damage ?? 315) * frac * (1 + (cfgC.damage_per_cube ?? 0.04) * Math.min(me.cubes, cfgC.stat_cap ?? 10))
+          if (T.weapons.includes("mortar")) dmg *= 1 + (L.stats.cookoff ?? 0.6)
+          if (dmg * 0.8 >= T.hp) fire[iLaser] = false
+        }
       } else if (L.cooldown <= 0.05 && seen && d < (L.stats.range ?? 280) && (hasLos || d < 60)) fire[iLaser] = true
     }
     let aim: [number, number] = [emph.yaw, emph.pitch]
