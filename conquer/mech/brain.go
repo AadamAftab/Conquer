@@ -92,6 +92,7 @@ type Brain struct {
 	oddsFleeUntil      float64
 	base               Params
 	baseSet, pracOn    bool
+	pracSure           bool // squad mode was on after pracSureT: a practice match
 	openOn             bool
 	npcHurt            float64
 	npcBearing         float64
@@ -341,6 +342,13 @@ func (b *Brain) observe(o *Obs) {
 	if b.otherDead >= 5 && (tweakFFAUntil <= 0 || b.otherSince < tweakFFAUntil) {
 		b.notPractice = true
 	}
+	if b.pracOn && now >= pracSureT {
+		b.pracSure = true
+	}
+	if tw.cautiousT > 0 && b.pracOn && now >= tw.cautiousT {
+		// late in practice: the cautious free-for-all parameters, as after a death we did not cause
+		b.notPractice = true
+	}
 	if on := b.base.Practice && !b.notPractice && now > tw.squadT; on != b.pracOn {
 		b.pracOn = on
 		b.P = b.base
@@ -415,6 +423,33 @@ func (b *Brain) zonePenalty(z *Zone, x, y float64) float64 {
 		p += soon * (25 + 0.8*(dn+5))
 	}
 	return p
+}
+
+// finalHold (tweakFinalHold): in the last shrink (to radius 0), our distance to its end point and how far from it we may
+// fight. The tolerance is a third of the disc around the end point still inside the current circle (6 m down to 0.9 m),
+// widened when a visible mech stands on the point (mechs are pushed apart). An infinite tolerance means no hold.
+func (b *Brain) finalHold(o *Obs) (float64, float64) {
+	z := &o.Zone
+	me := &o.Self
+	if z.NextRadius > 0.5 || b.now < z.ShrinkStart-2 || b.now > z.ShrinkEnd || z.ShrinkEnd <= z.ShrinkStart {
+		return 0, math.Inf(1)
+	}
+	cx, cy := z.NextCenter[0], z.NextCenter[1]
+	if b.W.Obst[b.W.vidx(cx, cy)] || b.W.OffMain(cx, cy) {
+		return 0, math.Inf(1) // end point in or on a building: original behaviour
+	}
+	c := b.curZone(z)
+	tol := clamp((c.R-hyp(c.X-cx, c.Y-cy))/3, 0.9, 6)
+	mine := b.Cfg.Mech.Radius * b.scaleOf(me.Cubes)
+	for _, t := range b.tracks {
+		if b.now-t.Seen > 0.5 {
+			continue
+		}
+		if need := mine + b.Cfg.Mech.Radius*b.scaleOf(t.Cubes) - hyp(t.Pos[0]-cx, t.Pos[1]-cy) + 0.7; need > tol {
+			tol = need
+		}
+	}
+	return hyp(cx-me.Pos[0], cy-me.Pos[1]), tol
 }
 
 func (b *Brain) zoneGoal(z *Zone, x, y float64) (float64, float64) {
@@ -719,6 +754,11 @@ func (b *Brain) step(o *Obs, act *Action) {
 	zoneMust := !me.InZone || now+tNeed+3 >= deadline
 	zoneShould := now+tNeed+14 >= deadline
 
+	finalD, finalTol := 0.0, math.Inf(1)
+	if tw.finalHold && (b.pracOn || b.pracSure) {
+		finalD, finalTol = b.finalHold(o)
+	}
+
 	escJump := false
 	switch {
 	case b.escape(me, &mx, &my, &boost, &escJump):
@@ -729,6 +769,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 	case b.dodgeShell(o, &mx, &my):
 		boost = me.Energy > 15
 		mode = "dodge"
+	case finalD > finalTol:
+		mx, my = b.travel(me, z.NextCenter[0], z.NextCenter[1])
+		boost = finalD > 4 && me.Energy > 5 && me.Grounded
+		mode = "final"
 	case zoneMust && zdist > 2:
 		mx, my = b.travel(me, zgx, zgy)
 		boost = (!me.InZone || now+tNeed >= deadline) && me.Energy > 5

@@ -66,18 +66,38 @@ const (
 	tweakHPw      = 0.0
 	tweakLowBonus = 0.0
 	tweakLethalK  = 0.0
+
+	// End game (practice only).
+	// tweakCautiousT: time (s) from which squad mode gives way to the cautious free-for-all parameters for the rest of
+	// the match, exactly as a house bot dying without us already does (0 = original: only such a death switches).
+	// Keeping squad mode after such late deaths (tweakFFAUntil 60) cost about 0.35, so the cautious mode is used late
+	// even in matches where no house bot has died. 265 s is when conquer's own "late" starts (next zone radius 70 m).
+	tweakCautiousT = 0.0
+	// tweakFinalHold: in the last shrink (radius 25 -> 0 m, 390-415 s, 260 HP/s outside), stay within a tolerance of
+	// its end point that shrinks with the circle (original: anywhere within 2 m once the zone deadline is near).
+	// The end point is the only spot inside until 415 s; each metre off it in the outward direction is up to
+	// 25/(25-L) s earlier outside (L = distance the centre still moves), i.e. several hundred HP, and survivors are
+	// then ranked by the order the zone kills them. It holds only in matches confirmed as practice (squad mode on
+	// after 60 s; in free-for-all a death we did not cause always ends squad mode before about 37 s).
+	tweakFinalHold = false
 )
+
+// pracSureT: squad mode still on at this time (s) confirms a practice match (see tweakFFAUntil).
+const pracSureT = 60.0
 
 type tweakSet struct {
 	hopT, loseK, squadT float64
 	finish, finishHP    float64
 	finishRush          bool
 	pursue, stick       float64
+	cautiousT           float64
+	finalHold           bool
 }
 
 // originalTweaks is the 70c8b23 behaviour.
 func originalTweaks() tweakSet {
-	return tweakSet{hopT: 0, loseK: 1, squadT: 20, finish: 14, finishHP: 0, finishRush: false, pursue: 1.01, stick: 120}
+	return tweakSet{hopT: 0, loseK: 1, squadT: 20, finish: 14, finishHP: 0, finishRush: false, pursue: 1.01, stick: 120,
+		cautiousT: 0, finalHold: false}
 }
 
 // tw holds the tweaks in use (a variable so that tests can compare against originalTweaks).
@@ -85,4 +105,5 @@ var tw = tweakSet{
 	hopT: tweakHopT, loseK: tweakLoseK, squadT: tweakSquadT,
 	finish: tweakFinish, finishHP: tweakFinishHP, finishRush: tweakFinishRush,
 	pursue: tweakPursue, stick: tweakStick,
+	cautiousT: tweakCautiousT, finalHold: tweakFinalHold,
 }
