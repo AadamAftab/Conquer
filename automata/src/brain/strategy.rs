@@ -599,9 +599,8 @@ impl Brain {
             consider(c, 10.0, &mut best);
         }
         consider(pos, 6.0, &mut best);
-        let t_act = self.t_act;
         for &r in &[12.0, 24.0, 40.0, 60.0] {
-            if t_act.elapsed().as_secs_f64() > 0.010 {
+            if self.spent_ms() > 10.0 {
                 break;
             }
             for k in 0..12 {
