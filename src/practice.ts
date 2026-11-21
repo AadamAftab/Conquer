@@ -43,6 +43,10 @@ export const PP = {
   cubeLo: 40,
   /** ignore weapon pickups more than 2 m above the ground */
   groundOnly: false,
+  /** cap speed at 4.6 m/s (silent steps) when calm */
+  quiet: true,
+  /** go for supply drops from roam when calm (in addition to / instead of the priority mode) */
+  dropRoam: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -317,7 +321,7 @@ export class Practice {
       boost = true
     }
     // quiet when calm
-    if (nThreat === 0 && (mode === "roam" || mode === "cube" || mode === "cover")) {
+    if (PP.quiet && nThreat === 0 && (mode === "roam" || mode === "cube" || mode === "cover")) {
       const cap = 4.6 / walk
       const l = Math.hypot(mv[0], mv[1])
       if (l > cap && !boost) mv = [(mv[0] / l) * cap, (mv[1] / l) * cap]
@@ -477,6 +481,16 @@ export class Practice {
     const w = this.h.w, m = this.h.m
     const cube = this.nearestCube(x, y, z, safe, nThreat ? 20 : 120)
     if (cube) return { p: [cube.pos[0], cube.pos[1]] }
+    if (PP.dropRoam && nThreat === 0 && hpFrac > 0.45) {
+      const meId = obs.self.id
+      for (const d of obs.drops) {
+        const dd = Math.hypot(d.pos[0] - x, d.pos[1] - y)
+        if (dd < 170 && d.lands_in < dd / 11.7 + 8 && !(d.holder !== null && d.holder !== meId && d.progress > 1.5) && safe(d.pos[0], d.pos[1])) {
+          if (dd < d.radius * 0.6) return { p: [x, y], stand: true }
+          return { p: [d.pos[0], d.pos[1]] }
+        }
+      }
+    }
     // farm: crates within 150 m, drones within 140 m when healthy
     const muz: V3 = [x, y, z + 7]
     const cands: { tr: Track; d: number; stand: number }[] = []
