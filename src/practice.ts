@@ -87,7 +87,7 @@ export const PP = {
   /** econ: turn toward an unseen attacker while the target is not the one hitting us; attackers seen later get the hit bonus */
   turnToHit: false,
   /** econ retreat thresholds scale (1 = TTUN values 0.35 / 0.55 / 0.8) */
-  econLoseK: 0.15,
+  econLoseK: 0.3,
   /** econ: heal (no target) below this hp fraction */
   econHealHp: 0.55,
   /** econ: scale of the mid-fight detours to cubes / weapons (1 = TTUN distances) */
@@ -107,7 +107,7 @@ export const PP = {
   /** practice: from this time on, stay out of sight and only answer attackers / close mechs (0 = off) */
   lateEvadeT: 0,
   /** econ: upgrade order override (empty = survival-first TTUN order) */
-  econUpg: ["gun_damage", "laser_damage", "gun_rate", "laser_charge", "lightning_efficiency", "plating", "armor", "nanites", "lightning_range", "lightning_chain", "gyros", "servos", "gun_mag", "capacitor", "reactor", "jets", "gun_velocity", "sensors", "mortar_reload", "mortar_velocity", "mortar_splash", "laser_pierce"] as string[],
+  econUpg: [] as string[],
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
