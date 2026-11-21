@@ -254,12 +254,13 @@ fn lab_dodge() {
         return;
     }
     let secs = 66.0;
+    let dists: Vec<f64> = std::env::var("LAB_DIST").ok().map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_else(|| vec![60.0, 100.0, 140.0, 180.0]);
     eprintln!("dodge: share of aimed gun shots that hit us (two shooter models), our own gun shots per minute");
     for (name, p) in sets() {
         for laser in [false, true] {
             let mut line = format!("{name:14} {}", if laser { "gun+laser" } else { "gun      " });
             let mut tot = Stats::default();
-            for d in [60.0, 100.0, 140.0, 180.0] {
+            for d in dists.iter().copied() {
                 let mut cell = String::new();
                 for (lat, cad) in [(0.05, 0.24), (0.1, 0.3)] {
                     let mut s = Stats::default();

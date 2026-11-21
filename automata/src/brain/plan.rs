@@ -409,7 +409,7 @@ impl Brain {
         // juke axis
         let mut juke: Option<V2> = None;
         for th in &threats {
-            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist {
+            if th.ghost || !th.los_now || !(th.gun || th.mortar) || th.dist < p.juke_min_dist || (p.juke_max_dist > 0.0 && th.dist > p.juke_max_dist) {
                 continue;
             }
             let to_us = (center[1] - th.eye[1]).atan2(center[0] - th.eye[0]);
