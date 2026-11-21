@@ -41,6 +41,10 @@ export class World {
   tracks = new Map<number, Track>()
   pickups = new Map<number, Pickup>()
   crates = new Map<number, Crate>()
+  /** power cubes seen on the ground (persist until picked up or seen gone) */
+  cubes = new Map<number, { id: number; pos: V3; seenT: number }>()
+  /** where mechs we killed died: their cubes (+2) lie there */
+  killSites: { pos: V3; t: number }[] = []
   ignorePickups = new Set<number>()
   heard: Heard[] = []
   hurt: Hurt[] = []
@@ -106,10 +110,13 @@ export class World {
           }
           break
         }
-        case "kill":
+        case "kill": {
           this.kills++
+          const tr = this.tracks.get(ev.target)
+          if (tr) this.killSites.push({ pos: tr.pos, t })
           this.tracks.delete(ev.target)
           break
+        }
         case "took":
           this.pickups.delete(ev.id)
           break
@@ -147,6 +154,18 @@ export class World {
       const d = Math.hypot(c.pos[0] - ex, c.pos[1] - ey)
       if (d < 30 && this.m.los(ex, ey, ez, c.pos[0], c.pos[1], c.pos[2] + 1.2)) this.crates.delete(id)
     }
+    const seenCube = new Set<number>()
+    for (const c of obs.cubes) {
+      seenCube.add(c.id)
+      this.cubes.set(c.id, { id: c.id, pos: c.pos, seenT: t })
+    }
+    for (const [id, c] of this.cubes) {
+      if (seenCube.has(id)) continue
+      const d = Math.hypot(c.pos[0] - ex, c.pos[1] - ey)
+      if ((d < 30 && this.m.los(ex, ey, ez, c.pos[0], c.pos[1], c.pos[2] + 0.5)) || t - c.seenT > 120) this.cubes.delete(id)
+    }
+    // a kill site is done once we stood near it (cubes there are then in sight) or it is old
+    this.killSites = this.killSites.filter((k) => t - k.t < 90 && Math.hypot(k.pos[0] - ex, k.pos[1] - ey) > 12)
     for (const b of obs.beams) {
       if (b.kind !== "laser") continue
       const tr = this.tracks.get(b.by)

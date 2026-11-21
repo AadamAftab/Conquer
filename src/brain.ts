@@ -163,6 +163,7 @@ export class Brain {
       const d = dTo(e.pos)
       if (d > 300) continue
       let sc = -d * 0.015
+      if (Math.abs(e.vel[2]) > 1.5 && e.kind === "mech") sc += 1.5
       if (e.kind === "npc") sc += 3 + (d < 25 ? 3 : 0)
       else if (t - e.hitUsT < 6) sc += 5
       if (e.id === this.targetId) sc += 2
@@ -810,10 +811,12 @@ export class Brain {
       if (c < 0 || m.wall[c] || Math.abs(p.pos[2] - m.groundAt(p.pos[0], p.pos[1])) > 2.5) continue
       consider([p.pos[0], p.pos[1]], "pickup", p.id, p.kind === "lightning" ? 0.35 : 0.55, nearestD > 100 ? 260 : 100)
     }
-    for (const c of obs.cubes) {
+    for (const c of w.cubes.values()) {
       if (Math.abs(c.pos[2] - m.surfAt(c.pos[0], c.pos[1])) > 3) continue
-      consider([c.pos[0], c.pos[1]], "cube", c.id, 0.45, nearestD > 60 ? 120 : 40)
+      consider([c.pos[0], c.pos[1]], "cube", c.id, 0.45, nearestD > 60 ? 140 : 40)
     }
+    // go back to where we killed someone: its cubes are there
+    if (nearestD > 80 && hpFrac > 0.6) for (const k of w.killSites) consider([k.pos[0], k.pos[1]], "cube", -2, 0.5, 160)
     // farm drones and crates for cubes (and crate weapons) while it is calm
     if (nearestD > 140 && hpFrac > 0.5 && !late && w.recentDamage(5) === 0) {
       for (const n of w.liveNpcs()) consider([n.pos[0], n.pos[1]], "farm", n.id, 1.1, 130)
