@@ -362,6 +362,17 @@ class EpistemicTracker:
         """True if any enemy mech is visible or still in recent memory (T0/T1)."""
         return any(b.tier <= 1 and b.kind == "mech" for b in self.beliefs.values())
 
+    def nearest_mech(self, x: float, y: float, max_tier: int = 1) -> Optional[BeliefEntry]:
+        """The closest tracked enemy MECH at tier <= max_tier (None if there is none)."""
+        best, bd = None, 0.0
+        for b in self.beliefs.values():
+            if b.kind != "mech" or b.tier > max_tier:
+                continue
+            d = math.hypot(b.pos[0] - x, b.pos[1] - y)
+            if best is None or d < bd:
+                best, bd = b, d
+        return best
+
     def nearest_mech_dist(self, x: float, y: float, max_tier: int = 1) -> Optional[float]:
         """
         Horizontal distance to the closest enemy MECH at tier <= max_tier,

@@ -262,8 +262,8 @@ OPENING_CALM_S: float      = 0.0   # 0 = no calm: the active bots in practice fi
 LATE_GAME_ALIVE: int       = 6
 
 # RECOVER (hide and heal between waves)
-RECOVER_START_FRAC: float  = 0.55  # nobody in sight and below this → hide and heal
-RECOVER_DONE_FRAC: float   = 0.85  # heal to this before looting / roaming again
+RECOVER_START_FRAC: float  = 0.45  # nobody in sight and below this → hide and heal
+RECOVER_DONE_FRAC: float   = 0.75  # heal to this before looting / roaming again
 POST_KILL_WINDOW_S: float  = 4.0   # right after a kill...
 POST_KILL_HP_FRAC: float   = 0.75  # ...recover if below this (kept small: idling costs kills)
 RECOVER_MAX_S: float       = 25.0  # give up recovering after this long
@@ -272,13 +272,15 @@ RECOVER_ZONE_LEAD_S: float = 20.0  # while recovering, head into the next circle
 EVADE_MIN_S: float         = 1.5   # minimum time in a retreat state (no flapping)
 # Outnumbered: enemies that HIT us count even when unseen
 ATTACKER_WINDOW_S: float   = 2.0
-OUTNUMBERED_HP_FRAC: float = 0.60  # retreat from a crowd / 2+ attackers only once below this
+OUTNUMBERED_HP_FRAC: float = 0.45  # retreat from a crowd / 2+ attackers only once below this
 PANIC_HP_FRAC: float       = 0.45  # an enemy inside PANIC_RANGE only forces a retreat below this
 # Don't hand the squad a target
 APPROACH_MIN_HP_FRAC: float = 0.50 # walk toward a far enemy only above this HP...
 APPROACH_ALONE_M: float    = 40.0  # ...and only if no other known enemy is this close to it
 APPROACH_BOOST_ENERGY: float = 80.0 # boost while closing in only with plenty of energy (keep dodge fuel)
-FARM_MIN_HP_FRAC: float    = 0.80  # shoot crates / drones only above this (damage dealt stops regen)
+FARM_MIN_HP_FRAC: float    = 0.55  # shoot crates / drones only above this (damage dealt stops regen)
+CUBE_FIGHT_RANGE_M: float  = 30.0  # mid-fight, steer toward a cube this close (kills drop several)
+CUBE_FIGHT_WEIGHT: float   = 1.4   # ...with this much weight next to the strafe/range vector
 HURT_AIM_S: float          = 1.5   # face a hit's direction this long when nothing is visible
 CALM_AVOID_M: float        = 140.0 # during the opening calm, take cover from a mech this close
 DISENGAGE_HP_FRAC: float   = 0.35  # fraction of max HP — below this (with threats), disengage
@@ -326,28 +328,31 @@ MORTAR_MIN_RANGE: float    = 15.0  # m — don't mortar yourself
 # Listed from highest to lowest priority. The bot picks the first item in this
 # list that appears among the offered choices.
 UPGRADE_PRIORITY: List[str] = [
-    "armor",           # -8% dmg taken (×3) — primary survivability
+    # Survive first, then the weapons we actually build around (gun + lightning),
+    # then the rest. Offers only list upgrades for weapons we hold, so the order
+    # among weapon upgrades only matters when the offer mixes them.
     "plating",         # +15% max HP (×3) — raw health pool
+    "armor",           # -8% dmg taken (×3) — survivability
     "nanites",         # +60% regen, -1.5s delay (×2) — fast recovery
-    "laser_damage",    # +18% laser dmg (×3) — alpha damage
-    "laser_charge",    # -25% charge time (×2) — faster shots
-    "servos",          # +8% move/boost speed (×3) — kite speed
-    "mortar_reload",   # -18% mortar cooldown (×3) — fire rate
+    "gyros",           # +30% turn rate (×2) — aim slew speed (more shots land)
     "gun_damage",      # +15% gun dmg (×3) — sustained DPS
+    "lightning_chain", # +1 chain hop (×2) — shreds a squad that bunches up
+    "laser_damage",    # +18% laser dmg (×3) — alpha damage
     "gun_rate",        # +15% fire rate (×3) — cyclic DPS
-    "gun_velocity",    # +25% speed / +15% range (×2) — leading easier
+    "servos",          # +8% move/boost speed (×3) — kite speed
     "gun_mag",         # +8 mag / -20% reload (×2) — ammo uptime
-    "mortar_splash",   # +30% splash radius (×2) — area control
-    "mortar_velocity", # +20% shell speed (×2) — shorter flight time
-    "laser_pierce",    # through 1 extra target (×1) — late-game
-    "lightning_chain", # +1 chain hop (×2)
-    "lightning_range", # +20% range/cone (×2)
+    "laser_charge",    # -25% charge time (×2) — faster shots
     "lightning_efficiency", # -35% energy / +10% dmg (×2)
+    "lightning_range", # +20% range/cone (×2)
     "capacitor",       # +30 max energy (×3)
     "reactor",         # +30% energy regen (×3)
     "jets",            # -25% boost/jet drain (×2)
-    "gyros",           # +30% turn rate (×2) — aim slew speed
     "sensors",         # +15m prox / +25m vision / half noise (×2)
+    "gun_velocity",    # +25% speed / +15% range (×2) — leading easier
+    "mortar_reload",   # -18% mortar cooldown (×3) — fire rate
+    "mortar_splash",   # +30% splash radius (×2) — area control
+    "mortar_velocity", # +20% shell speed (×2) — shorter flight time
+    "laser_pierce",    # through 1 extra target (×1) — late-game
 ]
 
 # ---------------------------------------------------------------------------

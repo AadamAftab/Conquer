@@ -375,7 +375,10 @@ class MotionController:
         reloading = bool(w0 and w0.get("kind") == "gun" and (w0.get("reload", 0.0) or 0.0) > 0.0)
         slot1_ready = bool(w1 and (w1.get("cooldown", 0.0) or 0.0) <= 0.1
                            and w1.get("kind") in ("laser", "mortar", "lightning"))
-        if C.PEEK_ON_RELOAD and reloading and not slot1_ready and world is not None:
+        # (Not when we hold lightning or a laser: they want us in range, and the
+        # reload is covered by the second weapon.)
+        has_special = bool(w1 and w1.get("kind") in ("lightning", "laser"))
+        if C.PEEK_ON_RELOAD and reloading and not slot1_ready and not has_special and world is not None:
             zone = obs["zone"]
             d = R.compute_mrm(
                 pos=pos, enemy_positions=[e["pos"] for e in (enemies or [foe])],
@@ -414,6 +417,21 @@ class MotionController:
                 k = C.OTHER_FOE_PUSH * (60.0 - de) / 60.0
                 mx -= k * (ex - sx) / de
                 my -= k * (ey - sy) / de
+
+        # --- Grab cubes mid-fight: a kill drops cubes at our feet, each worth +4 %
+        #     max HP (healed at once) and +4 % damage, and they unlock upgrades ---
+        if me.get("cubes", 0) < C.STAT_CAP_CUBES:
+            best_cube = None
+            for (kind, _cid), v in self._loot.items():
+                if kind != "cube":
+                    continue
+                dc = math.hypot(v["pos"][0] - sx, v["pos"][1] - sy)
+                if dc <= C.CUBE_FIGHT_RANGE_M and (best_cube is None or dc < best_cube[0]):
+                    best_cube = (dc, v["pos"])
+            if best_cube is not None:
+                cux, cuy = _unit(best_cube[1][0] - sx, best_cube[1][1] - sy)
+                mx += C.CUBE_FIGHT_WEIGHT * cux
+                my += C.CUBE_FIGHT_WEIGHT * cuy
 
         # --- Stay inside the coming zone ---
         zone = obs["zone"]

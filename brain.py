@@ -123,8 +123,16 @@ class Brain:
 
         # 2a. Panic: an enemy is inside PANIC_RANGE and we are not comfortable.
         #     Too close to kite from; hard-flee rather than trade point-blank.
+        #     Not while we hold lightning (it wants us close: fleeing switches it
+        #     off and hands the enemy free shots) and never from a duel we are
+        #     winning (the enemy is the more hurt of the two).
+        w_ = me.get("weapons") or [None, None]
+        holds_lightning = len(w_) > 1 and w_[1] is not None and w_[1].get("kind") == "lightning"
+        nearest = tracker.nearest_mech(pos[0], pos[1])
+        winning = (nearest is not None and isinstance(nearest.hp, (int, float))
+                   and nearest.hp / float(nearest.max_hp or 1400.0) < hp / max_hp)
         if (near_d is not None and near_d <= C.PANIC_RANGE
-                and hp < max_hp * C.PANIC_HP_FRAC):
+                and hp < max_hp * C.PANIC_HP_FRAC and not holds_lightning and not winning):
             self._entered_combat = True
             self._transition(self.EVADE)
             return self.state
