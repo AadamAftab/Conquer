@@ -41,7 +41,7 @@ export const RP = {
   /** test only: keep the navigator state left by the warmup (the hops of v13 and before) */
   warmNav: false,
   /** extra salt for our RNG: the scorer is deterministic, so a new salt gives a new sample of the same strategy */
-  salt: 8,
+  salt: 9,
   /** opening move for the first openT seconds (see Navigator.openMode); "none" = plain start */
   openMode: "hop" as "none" | "hop" | "side" | "jet" | "boost",
   openT: 4,
