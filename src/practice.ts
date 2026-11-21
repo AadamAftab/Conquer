@@ -76,6 +76,12 @@ export const PP = {
   /** the opening lasts until this time (s) or until this many mechs are left */
   lurkT: 75,
   lurkAlive: 9,
+  /** free-for-all: with this many mechs left or fewer, hold a sheltered spot inside the next circle when nothing is targeted (0 = off) */
+  ffaHold: 0,
+  /** free-for-all: prefer targets that are busy with someone else or weak */
+  ffaFocus: false,
+  /** free-for-all: without a laser, take cover from a laser carrier beyond this distance unless it is weak (0 = off) */
+  ffaOutgun: 70,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

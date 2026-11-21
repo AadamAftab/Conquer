@@ -122,6 +122,7 @@ export class Econ {
       const age = t - e.seenT
       if (age > 4) continue
       let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - e.hitUsT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      if (this.ffa && PP.ffaFocus) sc -= (t - e.hurtByOtherT < 3 ? 40 : 0) + (e.hp / Math.max(1, e.maxHp) < 0.4 ? 30 : 0)
       if (ffaPick) {
         // free-for-all: leave alone whoever is not fighting us, not weak, not busy and not close
         const d = dTo(e.pos), mem = PP.ffaMemS
@@ -200,6 +201,8 @@ export class Econ {
         for (const hh of w.hurt) if (hh.by !== null && hh.by < 100 && t - hh.t < 3) by.add(hh.by)
         if (by.size >= 2 && hpFrac < 0.85) losing = true
       }
+      // free-for-all: no laser against a laser carrier at range -> do not duel in the open
+      if (!losing && !finishing && this.ffa && PP.ffaOutgun > 0 && iLaser < 0 && T.weapons.includes("laser") && d > PP.ffaOutgun && tFrac > 0.35) losing = true
       if (losing) this.hideUntil = t + 6
       // aim and fire
       const r = this.fireAt(me, T, tc, d, age, seen, hasLos, iGun, iLaser, iLight, iMortar)
@@ -278,6 +281,11 @@ export class Econ {
         if (cv) (goal = cv), (creep = true)
         else stand = true
       } else stand = true
+    } else if (!goal && this.ffa && PP.ffaHold > 0 && obs.alive <= PP.ffaHold && !T && !(nearCube && nearCube.d < 30) && (this.holdSpot(x, y, nc, nr, cur, t))) {
+      // free-for-all end game: sit in a sheltered spot inside the next circle and let them come
+      mode = "hold"
+      goal = this.holdP
+      if (goal && Math.hypot(goal[0] - x, goal[1] - y) < 3) (goal = null), (stand = true)
     } else if (!goal) {
       if (zoneGoal) {
         if (mode === "roam") mode = "zone"
@@ -468,6 +476,35 @@ export class Econ {
         if (sc < bs) (bs = sc), (best = [px, py])
       }
     return best
+  }
+
+  holdP: V2 | null = null
+  private holdT = -99
+  private holdKey = ""
+  /** Least exposed reachable spot within 0.6 of the next circle (and inside the current one); refreshed every 4 s. */
+  private holdSpot(x: number, y: number, nc: V2, nr: number, cur: { c: V2; r: number }, t: number): boolean {
+    const key = `${nc[0].toFixed(0)},${nc[1].toFixed(0)},${nr.toFixed(0)}`
+    if (key === this.holdKey && t - this.holdT < 4 && this.holdP) return true
+    const m = this.h.m, rq = this.h.nav.rq
+    const comp = m.comp(rq)
+    const s0 = m.snap(x, y, rq, -1, 8)
+    if (s0 < 0) return false
+    const R = Math.max(8, 0.6 * nr)
+    let best = -1, bs = Infinity
+    for (let dy = -R; dy <= R; dy += 6)
+      for (let dx = -R; dx <= R; dx += 6) {
+        if (dx * dx + dy * dy > R * R) continue
+        const px = nc[0] + dx, py = nc[1] + dy
+        if (Math.hypot(px - cur.c[0], py - cur.c[1]) > cur.r - 10) continue
+        const n = m.nodeOf(px, py)
+        if (n < 0 || !m.passable(n, rq) || comp[n] !== comp[s0]) continue
+        const sc = m.openFar[n] + 0.6 * m.openNear[n] + 0.25 * Math.hypot(px - x, py - y)
+        if (sc < bs) (bs = sc), (best = n)
+      }
+    this.holdKey = key
+    this.holdT = t
+    this.holdP = best >= 0 ? [m.nodeX(best), m.nodeY(best)] : null
+    return !!this.holdP
   }
 
   private coverCache: { t: number; x: number; y: number; p: V2 | null } = { t: -99, x: 0, y: 0, p: null }

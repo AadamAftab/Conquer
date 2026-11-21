@@ -75,7 +75,7 @@ export class Brain {
     this.m = opts.map ?? new GameMap(hello.map.dir, cfg.mech.step_up ?? 1.2)
     this.w = new World(this.m, hello)
     this.nav = new Navigator(this.m)
-    this.rnd = rng((hello.seed ?? 1) ^ 0x5bd1e995)
+    this.rnd = rng(((hello.seed ?? 1) ^ 0x5bd1e995) + RP.salt * 7919)
     this.perCube = Number(cfg.cubes.size_per_cube ?? 0.05)
     this.g = cfg.mech.gravity ?? 22
     this.practice = new Practice(this)
