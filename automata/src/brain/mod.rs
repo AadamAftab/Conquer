@@ -1,5 +1,8 @@
 mod aim;
 mod aimz;
+mod duel;
+#[cfg(test)]
+mod duel_tests;
 mod kill;
 mod keep;
 mod laser;
@@ -109,6 +112,8 @@ pub struct Brain {
     pub(crate) roof_ban: Vec<(usize, f64)>,
     pub(crate) roof_step: Option<(i64, Option<V3>, f64)>,
     pub(crate) roof_first_t: f64,
+    /// the engagement model picked a distance beyond the legacy one for the current target
+    pub(crate) stand_off: bool,
     pub(crate) kills: u32,
     pub(crate) pk: laser::Peek,
     pub(crate) tele: tele::Tele,
@@ -184,6 +189,7 @@ impl Brain {
             roof_ban: Vec::new(),
             roof_step: None,
             roof_first_t: -1.0,
+            stand_off: false,
             kills: 0,
             pk: laser::Peek::new(),
             tele: tele::Tele::default(),
@@ -214,7 +220,7 @@ impl Brain {
             self.cad.update(obs, self.p.cad_period, self.p.cad_snap);
         }
         self.wave_update(obs, world, nav);
-        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5);
+        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5);
         self.order.update(obs);
         self.tele_update(obs);
         if self.p.halt_multi >= 1.0 && !self.order.halted && self.order.on_us(obs.t) as f64 >= self.p.halt_multi {
@@ -258,6 +264,11 @@ impl Brain {
         }
         sanitize(&mut act, &obs.me.stats);
         act
+    }
+
+    /// Opponents are assumed to be one squad until free-for-all play is detected.
+    pub(crate) fn squad_mode(&self) -> bool {
+        !(self.p.mode_detect > 0.5 && self.ffa.on)
     }
 
     pub(crate) fn held(&self, t: f64) -> bool {

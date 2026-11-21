@@ -1,3 +1,4 @@
+use super::duel::{self, Loadout};
 use super::math::*;
 use super::memory::Track;
 use super::{Brain, Goal, Mode, Tgt};
@@ -144,6 +145,7 @@ impl Brain {
         let t = obs.t;
         let pos = me.pos;
         let hpf = frac(me.hp, me.max_hp);
+        self.stand_off = false;
         let zi = self.zone_info(obs, world, nav);
         self.sq_update(obs, nav);
         let muzzle = up(pos, me.stats.muzzle_height);
@@ -273,8 +275,18 @@ impl Brain {
             } else if t - self.no_los.1 > p.no_los_drop_s * if self.finish_bonus(tr) > 0.0 { p.finish_chase_mult } else { 1.0 } {
                 self.mem.ban(tr.id, t + 8.0);
             }
-            let pref = self.gear_range(obs, tr, self.pref_range(obs, tr, hpf));
-            let g0 = if los { Goal::Range { pos: tp, pref } } else { Goal::Nav { pos: tp, arrive: (pref * 0.5).max(15.0) } };
+            let (base, far) = self.pref_range(obs, tr, hpf);
+            let pref = self.gear_range(obs, tr, base);
+            self.stand_off = far && pref >= base;
+            let hold = p.hold_hunter > 0.0 && !los && self.holds_for(obs, tr);
+            let g0 = if los {
+                Goal::Range { pos: tp, pref }
+            } else if hold {
+                // wait where we are while it closes in, back off once it is nearer than the preferred distance
+                Goal::Range { pos: tp, pref: pref.max(dist2(tp, pos)) }
+            } else {
+                Goal::Nav { pos: tp, arrive: (pref * 0.5).max(15.0) }
+            };
             if self.p.sv_spot > 0.0 {
                 self.mode = Mode::Fight;
             }
@@ -324,6 +336,8 @@ impl Brain {
         let pos = obs.me.pos;
         let z = &obs.zone;
         let gate = self.gate_closed(obs);
+        // a stand-off distance near the old engagement limit must not drop the target
+        let engage = if p.mx_on > 0.0 { p.engage_range.max(p.mx_max + p.range_band + 4.0) } else { p.engage_range };
         let mut best: Option<(f64, &Track)> = None;
         for tr in &self.mem.tracks {
             if tr.kind != ActorKind::Mech || t - tr.last_seen > p.target_memory_s {
@@ -341,7 +355,7 @@ impl Brain {
             if !self.sq_allow(obs, tr) || self.sf_hold(obs, tr) {
                 continue;
             }
-            if d > p.engage_range && !attacker {
+            if d > engage && !attacker {
                 continue;
             }
             if !self.ffa_allow(obs, tr, attacker, d) {
@@ -376,7 +390,8 @@ impl Brain {
         best.map(|b| b.1.clone())
     }
 
-    fn pref_range(&self, obs: &Obs, tr: &Track, hpf: f64) -> f64 {
+    /// Preferred distance to the target, and whether the engagement model moved it beyond the legacy one.
+    fn pref_range(&self, obs: &Obs, tr: &Track, hpf: f64) -> (f64, bool) {
         let p = &self.p;
         let me = &obs.me;
         let has = |k: WeaponKind| me.weapons.iter().flatten().any(|w| w.kind == k);
@@ -386,12 +401,46 @@ impl Brain {
         } else if has(WeaponKind::Mortar) && !has(WeaponKind::Gun) {
             pref = p.range_mortar;
         }
+        let mut far = false;
+        if p.mx_on > 0.0 {
+            let d = self.exchange_range(obs, tr, hpf, pref);
+            far = d > pref + 1.0;
+            pref = d;
+        }
         if has(WeaponKind::Lightning) && me.energy > 35.0 && hpf > p.lightning_rush_hp && (p.rush_solo <= 0.0 || self.rush_ok(obs, tr)) {
             pref = p.range_lightning;
+            far = false;
         } else if tr.has(WeaponKind::Lightning) {
             pref = pref.max(p.range_vs_lightning);
         }
-        pref
+        (pref, far)
+    }
+
+    /// Engagement distance from the expected exchange with the target and the other mechs shooting at us.
+    fn exchange_range(&self, obs: &Obs, tr: &Track, hpf: f64, legacy: f64) -> f64 {
+        let p = &self.p;
+        let me = &obs.me;
+        let t = obs.t;
+        let has = |k: WeaponKind| me.weapons.iter().flatten().any(|w| w.kind == k);
+        let rush = has(WeaponKind::Lightning) && me.energy > 35.0 && hpf > p.lightning_rush_hp && (p.rush_solo <= 0.0 || self.rush_ok(obs, tr));
+        let us = Loadout { gun: has(WeaponKind::Gun), laser: has(WeaponKind::Laser), lightning: rush };
+        let of = |x: &Track| Loadout { gun: x.has(WeaponKind::Gun) || x.weapons.is_empty(), laser: x.has(WeaponKind::Laser), lightning: x.has(WeaponKind::Lightning) };
+        let others: Vec<Loadout> = self.mem.tracks.iter().filter(|x| x.kind == ActorKind::Mech && x.id != tr.id && t - x.last_dmg_t < 5.0).take(6).map(of).collect();
+        let max = p.mx_max.min(self.cfg.vision.range + me.stats.vision_bonus - 15.0);
+        let d = duel::best_range(us, of(tr), &others, self.squad_mode(), legacy, p.mx_min, max, p.mx_kappa);
+        if d.is_finite() {
+            d
+        } else {
+            legacy
+        }
+    }
+
+    /// The target is coming for us and we can wait for it with a laser instead of walking up to it.
+    fn holds_for(&self, obs: &Obs, tr: &Track) -> bool {
+        let t = obs.t;
+        let laser = obs.me.weapons.iter().flatten().any(|w| w.kind == WeaponKind::Laser);
+        let hunting = self.order.came_at(tr.id, t, 8.0) || t - tr.last_dmg_t < 8.0;
+        laser && hunting && frac(tr.hp, tr.max_hp) >= self.p.finish_hp
     }
 
     pub(crate) fn in_play_pub(&self, obs: &Obs, zi: &ZoneInfo, q: V3, d: f64) -> bool {
