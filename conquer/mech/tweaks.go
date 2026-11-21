@@ -18,15 +18,15 @@ const (
 
 	// Squad (practice) parameters, applied by squadParams only.
 	// tweakFinish: range (m) we close to on a weak foe (Params.Finish, 14 = original).
-	tweakFinish = 20.0
+	tweakFinish = 14.0
 	// tweakFinishHP: foe HP fraction under which we close in (Params.FinishHP, 0 = original 0.38).
 	tweakFinishHP = 0.0
 	// tweakFinishRush: boost while closing in on a weak foe more than 2*Finish away with energy > 30 (Params.FinishRush, false = original).
 	tweakFinishRush = false
 	// tweakPursue: chase an engaged foe out of line of sight when its HP fraction is under this (Params.Pursue, 1.01 = original: always).
-	tweakPursue = 0.0
+	tweakPursue = 1.01
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
-	tweakStick = 200.0
+	tweakStick = 120.0
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
 	tweakHear = false
 	// tweakNpcGoneHP: a drone that vanishes from the observation below this HP fraction is dead and forgotten (0 = original: chased and shot for up to 12 s).
@@ -63,9 +63,9 @@ const (
 	tweakBoostHyst = false
 	// Squad targeting (0 = original): tweakHPw weight of foe HP in target choice (0.2), tweakLowBonus bonus for a foe under
 	// 30 % HP (100), tweakLethalK share of the partial-laser damage that must cover the foe's HP to release early (0.8).
-	tweakHPw      = 0.18
-	tweakLowBonus = 200.0
-	tweakLethalK  = 0.7
+	tweakHPw      = 0.0
+	tweakLowBonus = 0.0
+	tweakLethalK  = 0.0
 )
 
 type tweakSet struct {
