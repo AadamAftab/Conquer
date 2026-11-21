@@ -58,7 +58,7 @@ export const PP = {
   /** practice core: "lance" (Practice, best real 4.75) or "econ" (Econ core) */
   core: "econ" as "lance" | "econ",
   /** econ core preferred fight distances (laser / gun-only / lightning) */
-  econLaser: 110,
+  econLaser: 145,
   econGun: 70,
   econLight: 28,
 }
