@@ -23,6 +23,8 @@ mod lab;
 mod lab_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod laser_tests;
 mod wave;
 
 pub use params::Params;
@@ -115,6 +117,7 @@ pub struct Brain {
     pub(crate) roof_first_t: f64,
     pub(crate) kills: u32,
     pub(crate) pk: laser::Peek,
+    pub(crate) lz_tid: i64,
     pub(crate) tele: tele::Tele,
     pub(crate) aimz: aimz::AimZ,
     pub(crate) cad: aimz::Cadence,
@@ -192,6 +195,7 @@ impl Brain {
             roof_first_t: -1.0,
             kills: 0,
             pk: laser::Peek::new(),
+            lz_tid: -1,
             tele: tele::Tele::default(),
             aimz: aimz::AimZ::new(),
             cad: aimz::Cadence::new(),
