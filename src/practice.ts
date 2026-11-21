@@ -103,7 +103,7 @@ export const PP = {
   /** econ: weight of the target's hp in the target score (TTUN 90 per full health) */
   econTgtHpW: 90,
   /** econ: finish a target below this hp fraction (TTUN 0.2) */
-  econFinish: 0.2,
+  econFinish: 0.35,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
