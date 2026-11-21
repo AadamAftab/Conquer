@@ -37,6 +37,9 @@ const (
 	tweakNoAirBoost = false
 	// tweakNpcTie: ties between drones that hit us are broken by distance then id instead of map order (false = original, not reproducible).
 	tweakNpcTie = false
+	// tweakRear: squad mode only, target score bonus for a foe showing us its back (rear armor takes rear_mult damage),
+	// and the rear multiplier counted in the lethal laser release (0 = original).
+	tweakRear = 0.0
 )
 
 type tweakSet struct {
