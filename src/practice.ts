@@ -89,7 +89,7 @@ export const PP = {
   /** econ retreat thresholds scale (1 = TTUN values 0.35 / 0.55 / 0.8) */
   econLoseK: 0.3,
   /** econ: heal (no target) below this hp fraction */
-  econHealHp: 0.35,
+  econHealHp: 0.55,
   /** econ: scale of the mid-fight detours to cubes / weapons (1 = TTUN distances) */
   econDetourCube: 1,
   econDetourPick: 1,
