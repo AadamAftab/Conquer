@@ -41,9 +41,9 @@ export const RP = {
   /** test only: keep the navigator state left by the warmup (the hops of v13 and before) */
   warmNav: false,
   /** extra salt for our RNG: the scorer is deterministic, so a new salt gives a new sample of the same strategy */
-  salt: 3,
+  salt: 1,
   /** opening move for the first openT seconds (see Navigator.openMode); "none" = plain start */
-  openMode: "jet" as "none" | "hop" | "side" | "jet" | "boost",
+  openMode: "hop" as "none" | "hop" | "side" | "jet" | "boost",
   openT: 4,
   /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
   ffaCore: "econ" as "ninja" | "econ",
