@@ -271,4 +271,5 @@ def _make_safe_action(
 # Entry-point
 # ---------------------------------------------------------------------------
 
-mf.run(Bot)
+if __name__ == "__main__":
+    mf.run(Bot)

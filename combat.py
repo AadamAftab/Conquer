@@ -329,31 +329,23 @@ def pick_upgrade(offer: dict) -> int:
 def should_take_pickup(obs: dict, pickup: dict) -> bool:
     """
     Decide whether to take a weapon pickup.
-
-    Rules:
-      - Only take Laser or Mortar (not Lightning as a primary — it is
-        too energy-hungry and short-ranged for our kiting strategy).
-      - Only take if slot 1 is empty OR we are replacing a Lightning.
-      - Never drop the Arm Gun (slot 0).
+    Never drop the Arm Gun (slot 0).
+    Take any weapon if slot 1 is empty, or upgrade (laser > mortar > lightning).
     """
     kind = pickup.get("kind", "")
-    weapons = obs["self"].get("weapons", [None, None])
-    slot1 = weapons[1] if len(weapons) > 1 else None
-    slot1_kind = slot1["kind"] if slot1 else None
-
-    # We want Laser or Mortar in slot 1
-    if kind not in ("laser", "mortar"):
+    if kind not in ("laser", "mortar", "lightning"):
         return False
 
-    # Slot 1 is empty: always take
-    if slot1_kind is None:
+    weapons = obs["self"].get("weapons", [None, None])
+    slot1 = weapons[1] if len(weapons) > 1 else None
+    if slot1 is None:
         return True
 
-    # Prefer Laser over Mortar; replace Lightning with either
-    if slot1_kind == "lightning":
+    slot1_kind = slot1.get("kind")
+    if slot1_kind == "lightning" and kind in ("laser", "mortar"):
         return True
     if slot1_kind == "mortar" and kind == "laser":
-        return True  # Laser is generally better
+        return True
 
     return False
 
@@ -444,7 +436,7 @@ class CombatController:
         for pickup in obs.get("pickups", []):
             px, py = pickup["pos"][0], pickup["pos"][1]
             dist   = _dist2d(pos[0], pos[1], px, py)
-            if dist <= C.GUN_RELOAD and should_take_pickup(obs, pickup):
+            if dist <= 4.0 and should_take_pickup(obs, pickup):
                 slot1 = weapons[1] if len(weapons) > 1 else None
                 # Drop old slot-1 weapon first if needed
                 if slot1 is not None:
@@ -474,17 +466,13 @@ class CombatController:
 
         dist_to_target = _dist2d(pos[0], pos[1], tgt_pos[0], tgt_pos[1])
 
-        # ---- Reverse-kite aim: face the target while possibly moving away ----
-        # Combat.decide only sets aim; motion.py sets the move vector.
-        # We always keep the torso pointed at the threat.
-
-        # --- Primary aim: gun quadratic lead ---
+        # ---- Primary aim: gun quadratic lead ----
         gun_aim = gun_lead_aim(pos, tgt_pos, tgt_vel, muzzle_h)
         if gun_aim is None:
             # Fallback: direct aim
-            dx = tgt_pos[0] + 0.0 - pos[0]
-            dy = tgt_pos[1] + 0.0 - pos[1]
-            dz = (tgt_pos[2] + 4.5)   - (pos[2] + muzzle_h)
+            dx = tgt_pos[0] - pos[0]
+            dy = tgt_pos[1] - pos[1]
+            dz = (tgt_pos[2] + 4.5) - (pos[2] + muzzle_h)
             gun_aim = (math.atan2(dy, dx),
                        math.atan2(dz, math.hypot(dx, dy)))
 
@@ -501,20 +489,18 @@ class CombatController:
         # ---- Slot 0 (Arm Gun) fire decision ----
         fire0 = False
         if w0 and w0.get("kind") == "gun":
-            w0_ammo     = w0.get("ammo",    1)
+            w0_ammo     = w0.get("ammo", 1)
             w0_cooldown = w0.get("cooldown", 0.0)
-            w0_reload   = w0.get("reload",  0.0)
+            w0_reload   = w0.get("reload", 0.0)
 
-            # Reload early if less than 3 rounds and not already reloading
-            if w0_ammo < 3 and w0_reload == 0.0 and dist_to_target > 20.0:
+            # Only auto-reload if empty
+            if w0_ammo == 0 and w0_reload == 0.0:
                 action["reload"] = True
 
-            # Fire if cooldown expired and target within range
+            # Fire whenever target is within range and within front cone!
             if w0_cooldown <= 0.01 and dist_to_target <= C.GUN_RANGE:
-                # Only fire if we can hit: gun spread is 0.6°, so aim error
-                # must be under about 2× spread to expect hits
                 err_deg = self._aim_error_deg(aim, aim_yaw, aim_pitch)
-                if err_deg <= 5.0:
+                if err_deg <= 25.0:
                     fire0 = True
 
         # ---- Slot 1 weapon fire decision ----
