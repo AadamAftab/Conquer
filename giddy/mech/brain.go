@@ -1895,11 +1895,22 @@ func (b *Brain) chooseLoot(o *Obs, hpFrac float64, danger bool) *lootChoice {
 		}
 		return best
 	}
+	special := false
+	if tweakFFASeek > 0 && !b.pracOn && now < tweakFFASeekT {
+		_, hl := hasWeapon(me.Weapons, "laser")
+		_, hn := hasWeapon(me.Weapons, "lightning")
+		special = hl == nil && hn == nil
+	}
 	for _, p := range b.pickups {
 		rad := b.P.LootRadius
 		seek := p.Kind == "laser" && b.P.LaserSeek > rad
 		if seek {
 			rad = b.P.LaserSeek
+		}
+		if special && (p.Kind == "laser" || p.Kind == "lightning") && tweakFFASeek > rad {
+			// free-for-all opening: fetch a laser or lightning further away (recorded matches: from 90 to 150 m
+			// we armed by 60 s in 35 % of matches against 61-71 % for the best bots)
+			rad, seek = tweakFFASeek, true
 		}
 		if b.wantPickup(me, p.Kind) && hyp(p.Pos[0]-x, p.Pos[1]-y) < rad {
 			v := 60.0

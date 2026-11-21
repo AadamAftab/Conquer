@@ -91,6 +91,14 @@ const (
 	// (original: 0.125 s); while charging, the aim stays on the gun lead (original: the laser line from 45 % charge
 	// on), and gun shots whose bullet would follow the laser line off the gun lead are held.
 	tweakLaserSlew = false
+
+	// Free-for-all (outside squad mode).
+	// tweakFFASeek: in the first tweakFFASeekT seconds, without a laser or lightning, fetch one up to this distance (m)
+	// instead of the loot radius (90 m in free-for-all). In 127 recorded free-for-all matches, with the nearest ground
+	// laser/lightning 90-150 m from spawn, giddy-based bots held one at 60 s in 35 % of matches against 61-71 % for the
+	// best bots, and a held special weapon at 60 s went with about +3 to +4 points (0 = original).
+	tweakFFASeek  = 0.0
+	tweakFFASeekT = 60.0
 )
 
 // pracSureT: squad mode still on at this time (s) confirms a practice match (see tweakFFAUntil).
