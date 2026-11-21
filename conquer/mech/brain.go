@@ -95,6 +95,7 @@ type Brain struct {
 	npcHurt            float64
 	npcBearing         float64
 	notPractice        bool
+	otherSince         float64 // tweakFFAUntil: time the current run of deaths we did not cause was first seen
 	startAlive, kills  int
 	otherDead          int
 	stickID            int
@@ -329,11 +330,14 @@ func (b *Brain) observe(o *Obs) {
 		b.startAlive = o.Alive
 	}
 	if b.startAlive-o.Alive-b.kills > 0 {
+		if b.otherDead == 0 {
+			b.otherSince = now
+		}
 		b.otherDead++
 	} else {
 		b.otherDead = 0
 	}
-	if b.otherDead >= 5 {
+	if b.otherDead >= 5 && (tweakFFAUntil <= 0 || b.otherSince < tweakFFAUntil) {
 		b.notPractice = true
 	}
 	if on := b.base.Practice && !b.notPractice && now > tw.squadT; on != b.pracOn {

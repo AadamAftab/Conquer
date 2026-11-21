@@ -40,6 +40,11 @@ const (
 	// tweakRear: squad mode only, target score bonus for a foe showing us its back (rear armor takes rear_mult damage),
 	// and the rear multiplier counted in the lethal laser release (0 = original).
 	tweakRear = 0.0
+	// tweakFFAUntil: a death we did not cause switches to free-for-all play only if first seen before this time (s).
+	// In 77 recorded free-for-all matches the first such death always came before 37 s, for every mech, so those
+	// matches play exactly as before; in practice a late zone or drone death no longer drops the squad settings.
+	// (0 = original: any such death, at any time.)
+	tweakFFAUntil = 0.0
 )
 
 type tweakSet struct {
