@@ -4,6 +4,7 @@ import type { Navigator } from "./nav.ts"
 import type { Track, World } from "./world.ts"
 import { aimAt, clampPitch, shellLanding } from "./combat.ts"
 import { angDiff, type V2, type V3 } from "./geom.ts"
+import { PP } from "./practice.ts"
 
 /** Survival-first upgrade order of the economy core. */
 const UPG = ["plating", "armor", "nanites", "lightning_efficiency", "laser_damage", "laser_charge", "gun_damage", "gun_rate", "lightning_range", "lightning_chain", "gyros", "servos", "gun_mag", "capacitor", "reactor", "jets", "gun_velocity", "sensors", "mortar_reload", "mortar_velocity", "mortar_splash", "laser_pierce"]
@@ -188,7 +189,7 @@ export class Econ {
         if (me.energy > 15) boost = true
       } else {
         const lightning = iLight >= 0
-        const prefer = lightning ? 28 : iLaser >= 0 ? 110 : 70
+        const prefer = lightning ? PP.econLight : iLaser >= 0 ? PP.econLaser : PP.econGun
         let radial = 0
         if (d > prefer + 15) {
           radial = 1
