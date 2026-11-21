@@ -18,7 +18,7 @@ export const PP = {
   manyDps: 110,
   finishFrac: 0.3,
   strafe: 0.85,
-  drops: true,
+  drops: false,
   killSites: false,
   /** economy loop: cube/weapon detours even mid-fight, wider farming, opportunistic farm shots */
   econ: false,
@@ -44,9 +44,9 @@ export const PP = {
   /** ignore weapon pickups more than 2 m above the ground */
   groundOnly: false,
   /** cap speed at 4.6 m/s (silent steps) when calm */
-  quiet: false,
+  quiet: true,
   /** go for supply drops from roam when calm (in addition to / instead of the priority mode) */
-  dropRoam: false,
+  dropRoam: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
