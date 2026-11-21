@@ -99,6 +99,7 @@ type Brain struct {
 	otherDead          int
 	stickID            int
 	stickAt, loseAt    float64
+	prevT              float64
 }
 
 type Params struct {
@@ -269,7 +270,12 @@ func (b *Brain) observe(o *Obs) {
 		if now-t.Seen > 120 {
 			delete(b.npcs, id)
 		}
+		// a drone listed last time but not now, and nearly dead, was killed (a living one stays listed for memory_s)
+		if tweakNpcGoneHP > 0 && t.Seen != now && t.Seen == b.prevT && t.HP <= tweakNpcGoneHP*math.Max(1, t.MaxHP) {
+			delete(b.npcs, id)
+		}
 	}
+	b.prevT = now
 	upd := func(tab map[int]*known, items []Item) {
 		for i := range items {
 			it := &items[i]
@@ -783,6 +789,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 			}
 			var bc *Vec3
 			for _, c := range b.cubes {
+				if tweakCubeLevel && c.Pos[2]-b.W.GroundAt(c.Pos[0], c.Pos[1]) > 3.2 && math.Abs(c.Pos[2]-zf) > 2 {
+					continue
+				}
 				if d := hyp(c.Pos[0]-x, c.Pos[1]-y); d < r {
 					r = d
 					cp := c.Pos
@@ -910,7 +919,8 @@ func (b *Brain) step(o *Obs, act *Action) {
 			if now-n.HitMe < 3 {
 				off = 0
 			}
-			if off < bestOff {
+			tie := tweakNpcTie && worst != nil && off == bestOff && (n.Dist < worst.Dist || n.Dist == worst.Dist && n.ID < worst.ID)
+			if off < bestOff || tie {
 				bestOff, worst = off, n
 			}
 		}
@@ -1134,6 +1144,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 		if me.Energy > 25 && me.Grounded {
 			boost = true
 		}
+	}
+	if tweakNoAirBoost && !me.Grounded && mode != "escape" && mode != "dodge" {
+		boost = false
 	}
 	if tw.hopT > 0 && now < tw.hopT && (mx != 0 || my != 0) {
 		mx, my = mx*0.5-my*0.85, my*0.5+mx*0.85
