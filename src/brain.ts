@@ -49,6 +49,7 @@ export class Brain {
   vsActive = 0
   holdT = -99
   camping = false
+  ninja = false
   hasLightning = false
   meObs: SelfObs | null = null
   cover: V2 | null = null
@@ -211,8 +212,11 @@ export class Brain {
     this.meObs = me
     this.hasLightning = iLight >= 0
     this.updateViewsheds(t, x, y)
-    this.nav.costFn = this.vsActive > 0 ? (n: number) => 3 * this.exposedAt(n) + (0.3 * m.openFar[n]) / 255 : null
-    const zGoal = this.zoneGoal(obs, x, y, rq)
+    // ninja features only in free-for-all (practice house bots hunt us wherever we hide)
+    const ffa = w.mode === "ffa"
+    this.nav.costFn = ffa && this.vsActive > 0 ? (n: number) => 3 * this.exposedAt(n) + (0.3 * m.openFar[n]) / 255 : null
+    if (ffa !== this.ninja) (this.ninja = ffa), (this.holdGoal = null)
+    const zGoal = ffa ? this.zoneGoal(obs, x, y, rq) : this.zoneGoalPractice(obs, x, y, rq)
     const rotate = this.needRotate(obs, x, y, t)
     const dodge = this.mortarDodge(obs, x, y)
     const comp = m.comp(rq)
@@ -474,7 +478,7 @@ export class Brain {
     if (e.hp / Math.max(1, e.maxHp) < 0.35 && d < 130) return true
     if (this.w.mode === "ffa" && Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > 2.2 && d < 90) return true
     // camping in the nest: pick off favourable targets only, when the trade is clearly ours
-    if (this.camping && this.meObs && d < 200) {
+    if (this.ninja && this.camping && this.meObs && d < 200) {
       const backTurned = Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > 2
       const fav = e.hp / Math.max(1, e.maxHp) < 0.5 || Math.abs(e.vel[2]) > 1.5 || (t - e.laserT < 1.3 && !e.charging) || t - e.hurtByOtherT < 3 || backTurned
       if (fav && assess(this.m, this.w, this.meObs, x, y, e, this.hello.config, this.perCube).adv > RP.campAdv) return true
@@ -714,6 +718,51 @@ export class Brain {
     let c = 0
     for (let i = 0; i < this.vsActive; i++) if (this.vsPool[i].seen(n)) c++
     return c
+  }
+
+  /** Practice hold spot (v6): inside the next circle, hugging a wall. */
+  private zoneGoalPractice(obs: Observation, x: number, y: number, rq: number): V2 {
+    const z = obs.zone
+    const key = `${z.next_center[0]},${z.next_center[1]},${z.next_radius}`
+    if (this.holdKey === key && this.holdGoal) return this.holdGoal
+    const [cx, cy] = z.next_center
+    const R = z.next_radius
+    const want = R <= 0 ? 0 : R <= 25 ? R * 0.2 : R <= RP.lateRadius ? R * 0.35 : R < 45 ? R * 0.3 : R * 0.55
+    const d = Math.hypot(x - cx, y - cy)
+    let gx = x, gy = y
+    if (d > want) {
+      gx = cx + ((x - cx) / d) * want
+      gy = cy + ((y - cy) / d) * want
+    }
+    const m = this.m
+    const comp = m.comp(rq)
+    const s = m.snap(x, y, rq, -1, 6)
+    const myComp = s >= 0 ? comp[s] : -1
+    const n = m.snap(gx, gy, rq, myComp, 60)
+    if (n >= 0) (gx = m.nodeX(n)), (gy = m.nodeY(n))
+    // prefer a spot hugging a wall nearby (fewer angles to be shot from)
+    if (R >= 45 && R > RP.lateRadius) {
+      let bs = Infinity
+      let bx = gx, by = gy
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2
+        for (const r of [0, 8, 16, 26, 38]) {
+          if (r === 0 && k > 0) continue
+          const px = gx + Math.cos(a) * r, py = gy + Math.sin(a) * r
+          const q = m.nodeOf(px, py)
+          if (!m.passable(q, rq) || (myComp >= 0 && comp[q] !== myComp)) continue
+          if (Math.hypot(px - cx, py - cy) > R * 0.7) continue
+          const cl = m.nClear[q]
+          const sc = r * 0.15 + (cl > rq + 2.5 ? 6 : 0) + Math.abs(cl - (rq + 1)) * 0.8
+          if (sc < bs) (bs = sc), (bx = m.nodeX(q)), (by = m.nodeY(q))
+        }
+      }
+      gx = bx
+      gy = by
+    }
+    this.holdGoal = [gx, gy]
+    this.holdKey = key
+    return this.holdGoal
   }
 
   /**
@@ -971,7 +1020,7 @@ export class Brain {
     }
     // holding: watch the open sectors of our spot (where enemies can come from or be shot)
     const q = this.m.nodeOf(x, y)
-    const mask = q >= 0 ? this.m.openMask[q] : 0
+    const mask = q >= 0 && this.ninja ? this.m.openMask[q] : 0
     if (mask) {
       const secs: number[] = []
       for (let k = 0; k < 16; k++) if (mask & (1 << k)) secs.push((k / 16) * Math.PI * 2)
