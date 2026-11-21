@@ -10,7 +10,7 @@ const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficienc
 /** Tunables of the practice core (BOTP env var overrides them in local tests). */
 export const PP = {
   laserRange: 145,
-  gunRange: 85,
+  gunRange: 70,
   lightRange: 28,
   retreatHp: 0.38,
   retreatExit: 0.8,
@@ -19,6 +19,13 @@ export const PP = {
   finishFrac: 0.3,
   strafe: 0.85,
   drops: true,
+  killSites: false,
+  /** economy loop: cube/weapon detours even mid-fight, wider farming, opportunistic farm shots */
+  econ: true,
+  /** conditional "losing" retreat with a 6 s hide window, then heal in cover */
+  ttun: true,
+  /** never drop the gun: gun + best special (laser preferred) */
+  keepGun: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -51,6 +58,7 @@ export class Practice {
   wdStrikes = 0
   climbUntil = -1
   scanYaw = 0
+  hideUntil = -1
 
   constructor(h: Host) {
     this.h = h
@@ -143,6 +151,13 @@ export class Practice {
     const outranged = !hasLaser && threats.some((s) => s.e.weapons.includes("laser") && s.d > 70)
     const finishing = shootable && T!.e.hp <= PP.finishFrac * T!.e.maxHp && dT < 130 && hpFrac > 0.3 && threats.length <= 2
     const closeFight = (shootable && dT < 40 && (hasLight || hpFrac > 0.5)) || finishing
+    let losing = false
+    if (PP.ttun) {
+      const n160 = seen.filter((s) => s.d < 160 && (s.vis || t - s.e.hitUsT < 3)).length
+      const tFrac = T ? T.e.hp / Math.max(1, T.e.maxHp) : 0
+      losing = !finishing && ((hpFrac < 0.35 && T !== null && tFrac > hpFrac + 0.1) || (n160 >= 2 && hpFrac < 0.55) || (n160 >= 3 && hpFrac < 0.8))
+      if (losing) this.hideUntil = t + 6
+    }
 
     // ---------- zone ----------
     const zo = obs.zone
@@ -160,16 +175,27 @@ export class Practice {
 
     // ---------- goals ----------
     const drop = PP.drops ? this.dropGoal(obs, x, y, t, seen, hpFrac, walk) : null
-    const cube = this.nearestCube(x, y, z, safe, 70)
+    let cube = this.nearestCube(x, y, z, safe, PP.econ ? (hpFrac > 0.5 ? 70 : 40) : 70)
+    // the cubes of the mechs we killed lie where they died: go and get them when nobody is close
+    if (!cube && PP.killSites && hpFrac > 0.4 && !seen.some((s) => s.d < 60)) {
+      for (const k of w.killSites) {
+        const d = dTo(k.pos)
+        if (d < 150 && safe(k.pos[0], k.pos[1]) && (!cube || d < cube.d)) cube = { pos: k.pos, d }
+      }
+    }
     const pick = this.wantedPickup(slots, x, y, z, safe, gunOnly ? 240 : 160)
+    const needHeal = PP.ttun && !shootable && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9)) && !(cube && cube.d < 40)
 
     // ---------- mode ----------
     let mode: Mode
+    const coverNow = PP.ttun ? losing || needHeal : (this.retreating || many || outranged) && !closeFight
     if (urgent) mode = "zone"
-    else if ((this.retreating || many || outranged) && !closeFight) mode = "cover"
+    else if (coverNow && !(PP.econ && cube && cube.d < 12)) mode = "cover"
     else if (mustGo) mode = "zone"
     else if (drop) mode = "drop"
-    else if (cube && hpFrac > 0.35 && threats.length <= 1 && (cube.d < 10 || !shootable || dT > 60)) mode = "cube"
+    else if (PP.econ && cube && hpFrac > 0.35) mode = "cube"
+    else if (PP.econ && pick && shootable && pick.d < (gunOnly ? 60 : 35)) mode = "loot"
+    else if (!PP.econ && cube && hpFrac > 0.35 && threats.length <= 1 && (cube.d < 10 || !shootable || dT > 60)) mode = "cube"
     else if (gunOnly && pick && t - w.lastHurtT > 1.5 && (!shootable || dT > 50 || pick.d < 20)) mode = "loot"
     else if (shootable) mode = "fight"
     else if (pick) mode = "loot"
@@ -200,8 +226,12 @@ export class Practice {
         const c = this.coverPoint(x, y, z, t, threats, mustGo, nc, nr, cur)
         if (c && (c.vis === 0 || !shootable)) {
           mv = go(c.p[0], c.p[1])
-          if (t - w.lastHurtT < 2 && me.energy > 30) boost = true
-          this.state = "cover"
+          if (PP.ttun && needHeal && !losing) {
+            const l = Math.hypot(mv[0], mv[1])
+            if (l > 0.4) mv = [(mv[0] / l) * 0.4, (mv[1] / l) * 0.4]
+            if (c.vis === 0 && Math.hypot(c.p[0] - x, c.p[1] - y) < 2) mv = [0, 0]
+          } else if (t - w.lastHurtT < 2 && me.energy > 30) boost = true
+          this.state = needHeal && !losing ? "heal" : "cover"
         } else if (gunOnly && pick && pick.d < 90 && hpFrac > 0.3) {
           mv = go(pick.pos[0], pick.pos[1])
           this.state = "cover-loot"
@@ -279,6 +309,7 @@ export class Practice {
     // ---------- firing (independent of mode) ----------
     const fire: [boolean, boolean] = [false, false]
     let aimYP: [number, number] | null = null
+    if (!shootable && !farm && PP.econ && hpFrac > 0.4 && t - w.lastHurtT > 1.5) farm = this.farmInSight(x, y, z, t)
     const tgt: Track | null = shootable ? T!.e : farm
     const turnToHit = hiddenBearing !== null && !(shootable && dT < 45)
     if (tgt && !turnToHit) {
@@ -329,6 +360,14 @@ export class Practice {
     if (slots.some((s) => s?.kind === kind)) return { ok: false }
     const empty = slots.findIndex((s) => !s)
     if (empty >= 0) return { ok: true }
+    if (PP.keepGun) {
+      // keep the gun; replace the other special only for a clearly better one (laser > lightning > mortar)
+      const pref = (k: string) => (k === "laser" ? 3.2 : k === "lightning" ? 2.5 : 1)
+      const other = slots.findIndex((s) => s && s.kind !== "gun")
+      const charging = slots.some((s) => s?.kind === "laser" && (s.charge ?? 0) > 0)
+      if (other >= 0 && !charging && pref(kind) > pref(slots[other]!.kind) + 0.5) return { ok: true, drop: other }
+      return { ok: false }
+    }
     const mortar = slots.findIndex((s) => s?.kind === "mortar")
     if (mortar >= 0) return { ok: true, drop: mortar }
     const gun = slots.findIndex((s) => s?.kind === "gun")
@@ -424,12 +463,12 @@ export class Practice {
     const cands: { tr: Track; d: number; stand: number }[] = []
     for (const c of w.crates.values()) {
       const d = Math.hypot(c.pos[0] - x, c.pos[1] - y)
-      if (d < 150 && safe(c.pos[0], c.pos[1]) && Math.abs(c.pos[2] - m.groundAt(c.pos[0], c.pos[1])) < 3)
+      if (d < 150 && (!PP.econ || hpFrac > 0.45) && safe(c.pos[0], c.pos[1]) && Math.abs(c.pos[2] - m.groundAt(c.pos[0], c.pos[1])) < 3)
         cands.push({ tr: { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [], hurtByOtherT: -99 }, d, stand: 22 })
     }
-    if (hpFrac > 0.55) for (const n of w.liveNpcs()) {
+    if (hpFrac > (PP.econ ? 0.5 : 0.55)) for (const n of w.liveNpcs()) {
       const d = Math.hypot(n.pos[0] - x, n.pos[1] - y)
-      if (d < 140 && safe(n.pos[0], n.pos[1])) cands.push({ tr: n, d: d + 30, stand: 50 })
+      if (d < (PP.econ ? 170 : 140) && safe(n.pos[0], n.pos[1])) cands.push({ tr: n, d: PP.econ ? d - 20 : d + 30, stand: 50 })
     }
     cands.sort((a, b) => a.d - b.d)
     for (const c of cands.slice(0, 4)) {
@@ -444,6 +483,24 @@ export class Practice {
     }
     if (Math.hypot(nc[0] - x, nc[1] - y) > Math.max(0.55 * nr, 15)) return { p: [nc[0], nc[1]] }
     return null
+  }
+
+  /** Nearest crate (120 m) or drone (110 m) in line of fire, to shoot while doing something else. */
+  private farmInSight(x: number, y: number, z: number, t: number): Track | null {
+    const w = this.h.w, m = this.h.m
+    const mz = z + 7
+    let best: Track | null = null
+    let bd = Infinity
+    for (const c of w.crates.values()) {
+      const d = Math.hypot(c.pos[0] - x, c.pos[1] - y)
+      if (d < 120 && d < bd && m.los(x, y, mz, c.pos[0], c.pos[1], c.pos[2] + 1.2))
+        (bd = d), (best = { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [], hurtByOtherT: -99 })
+    }
+    for (const n of w.liveNpcs()) {
+      const d = Math.hypot(n.pos[0] - x, n.pos[1] - y)
+      if (d < 110 && d < bd && m.los(x, y, mz, n.pos[0], n.pos[1], n.pos[2] + 1.75)) (bd = d), (best = n)
+    }
+    return best
   }
 
   /** Fixed range per weapon, radial correction plus a lateral strafe that flips at random. */

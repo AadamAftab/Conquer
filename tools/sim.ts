@@ -24,6 +24,12 @@ const REAL_ERR = Number(process.env.SIMERR ?? 0.02)
 const REAL_OMNI = process.env.SIMOMNI === "1"
 // SIMFFA=1: free-for-all, every house bot fights the nearest mech it sees (like qualifying/final)
 const FFA = process.env.SIMFFA === "1"
+// SIMMODE=lance: house model of a public 4.75 bot's sim (all 15 hunt within a tier chase radius,
+// tier fire ranges, aim noise per tier x SIMLF, lasers on the 3 experts)
+const LANCE = process.env.SIMMODE === "lance"
+const LF = Number(process.env.SIMLF ?? 1)
+const SCHED = process.env.SIMSCHED === "1"
+const L_NOISE = [4.0, 2.5, 1.3, 0.7], L_CHASE = [150, 260, 420, 1e9], L_RANGE = [110, 140, 170, 200]
 const lines = gunzipSync(readFileSync(KIT + "/check/stream.jsonl.gz")).toString("utf8").trim().split("\n")
 const HELLO = JSON.parse(lines[0])
 HELLO.map.dir = KIT + "/arena"
@@ -102,7 +108,10 @@ function runMatch(seed: number) {
       offer: null, offersPending: 0, upgrades: [], stats: { ...C.mech }, hitByUsT: -99, flipT: 0, side: 1,
     }
     m.cmdAim = [...m.aim] as V2
-    if (REAL) {
+    ;(m as any).tier = i <= 4 ? 0 : i <= 8 ? 1 : i <= 12 ? 2 : 3
+    if (LANCE) {
+      if (i >= 13) m.weapons[1] = mkWeapon("laser")
+    } else if (REAL) {
       if (i > 0 && R() < 0.5 + skill * 0.5) m.weapons[1] = mkWeapon(R() < 0.75 ? "laser" : "lightning")
     } else if (i > 0 && R() < (0.2 + skill * 0.6) * (0.4 + HARD)) m.weapons[1] = mkWeapon(R() < 0.4 + 0.4 * HARD ? "laser" : "lightning")
     mechs.push(m)
@@ -230,7 +239,7 @@ function runMatch(seed: number) {
     if (live.length <= 1 || !me.alive) break
     const Z = zoneAt(phases, t)
     const house = live.filter((m) => m.id !== 0)
-    const nHunt = t > 300 ? 99 : 1 + (15 - house.length)
+    const nHunt = LANCE && !SCHED ? 99 : LANCE ? 1 + st.kills + (t > 120 ? 2 : 0) + (t > 240 ? 99 : 0) : t > 300 ? 99 : 1 + (15 - house.length)
     house.sort((a, b) => a.skill - b.skill || a.id - b.id)
     house.forEach((m, k) => (m.hunter = k < nHunt))
     if (tick % C.match.decide_every === 0) {
@@ -550,6 +559,7 @@ function blocked(x: number, y: number, z: number) {
 function houseAct(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, us: Mech, intel: { t: number; pos: V3 }, R: () => number) {
   const d = Math.hypot(us.pos[0] - m.pos[0], us.pos[1] - m.pos[1])
   const iSee = us !== m && m.seen.get(us.id) === t
+  if (LANCE && !FFA) return lanceAct(m, t, Z, us, d, iSee, R)
   const knows = t - intel.t < 6
   m.fire = [false, false]
   m.boost = false
@@ -656,3 +666,35 @@ for (let k = 0; k < N_MATCH; k++) {
 }
 const mean = (f: (r: any) => number) => (results.reduce((s, r) => s + f(r), 0) / results.length).toFixed(2)
 console.log(`mean score ${mean((r) => r.score)}  survive ${mean((r) => r.t)}s  kills ${mean((r) => r.kills)}  dealt ${mean((r) => r.dealt)}  taken ${mean((r) => r.taken)} (hunter ${mean((r) => r.byHunter)} other ${mean((r) => r.byOther)} npc ${mean((r) => r.byNpc)})  cubes ${mean((r) => r.cubes)}  late ${mean((r) => r.late)}  acc gun ${(results.reduce((a, r) => a + r.hits, 0) / Math.max(1, results.reduce((a, r) => a + r.shots, 0))).toFixed(2)} laser ${(results.reduce((a, r) => a + r.lzHits, 0) / Math.max(1, results.reduce((a, r) => a + r.lzShots, 0))).toFixed(2)} (${mean((r) => r.lzShots)}/m) lightning ${(results.reduce((a, r) => a + r.ltHits, 0) / Math.max(1, results.reduce((a, r) => a + r.ltShots, 0))).toFixed(2)}`)
+
+
+function lanceAct(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, us: Mech, d: number, iSee: boolean, R: () => number) {
+  const tier = (m as any).tier as number
+  m.fire = [false, false]
+  m.boost = false
+  m.jump = false
+  const provoked = t - m.hitByUsT < 8
+  if (us.alive && iSee && d < L_RANGE[tier] && (m.hunter || provoked)) {
+    if (t > (m as any).flipT) ((m as any).flipT = t + 1 + R() * 2), ((m as any).side = R() < 0.5 ? -1 : 1)
+    const s = d < 90 ? ((m as any).side ?? 1) : 0
+    const b = Math.atan2(us.pos[1] - m.pos[1], us.pos[0] - m.pos[0])
+    const radial = d > L_RANGE[tier] * 0.8 ? 0.7 : d < 30 ? -0.5 : 0
+    m.move = [Math.cos(b) * radial - Math.sin(b) * s * 0.8, Math.sin(b) * radial + Math.cos(b) * s * 0.8]
+    if (blocked(m.pos[0] + m.move[0] * 4, m.pos[1] + m.move[1] * 4, m.pos[2])) m.move = [Math.cos(b) * radial, Math.sin(b) * radial]
+    const lead = tier >= 1 ? d / 252 : 0
+    const px = us.pos[0] + us.vel[0] * lead, py = us.pos[1] + us.vel[1] * lead
+    const err = (L_NOISE[tier] * LF * Math.PI) / 180
+    m.cmdAim = [Math.atan2(py - m.pos[1], px - m.pos[0]) + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
+    const onTarget = Math.abs(angDiff(m.cmdAim[0], m.aim[0])) < 0.05
+    m.fire = [onTarget, false]
+    const w1 = m.weapons[1]
+    if (w1?.kind === "laser") m.fire[1] = !((w1.charge ?? 0) >= w1.stats.charge && onTarget)
+    return
+  }
+  const goal: V2 = us.alive && m.hunter && (SCHED || d < L_CHASE[tier]) ? [us.pos[0], us.pos[1]] : [Z.next.c[0] + Math.cos(m.id * 2.4) * Z.next.r * 0.4, Z.next.c[1] + Math.sin(m.id * 2.4) * Z.next.r * 0.4]
+  const r = m.nav!.steer(m.pos[0], m.pos[1], goal[0], goal[1], t, 2500)
+  m.move = r.arrived ? [0, 0] : r.dir
+  m.jump = r.jump
+  const look = us.alive && m.hunter ? Math.atan2(us.pos[1] - m.pos[1], us.pos[0] - m.pos[0]) : Math.atan2(m.move[1], m.move[0]) + Math.sin(t + m.id) * 1.2
+  m.cmdAim = [look || m.aim[0], 0]
+}
