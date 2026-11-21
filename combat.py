@@ -120,7 +120,8 @@ def mortar_pitch(
     tube_pos: List[float],
     tgt_pos: List[float],
     high_arc: bool = True,
-) -> Optional[Tuple[float, float]]:
+    tube_height: Optional[float] = None,
+) -> Optional[Tuple[Tuple[float, float], float]]:
     """
     Compute the mortar tube pitch (radians) to hit tgt_pos from tube_pos.
 
@@ -132,12 +133,17 @@ def mortar_pitch(
 
     The caller picks pitch_high when lobbing over obstacles (default),
     pitch_low when the target is in the open.
+
+    Pitches are NOT clamped here: the caller must check them against
+    [MIN_PITCH, MAX_PITCH], because a clamped pitch lands somewhere else.
     """
     v0 = C.MORTAR_SPEED
     g  = C.MORTAR_GRAVITY
+    if tube_height is None:
+        tube_height = C.MECH_MORTAR_HEIGHT
 
     # Mortar tube is at the top of the mech
-    tube = [tube_pos[0], tube_pos[1], tube_pos[2] + C.MECH_MORTAR_HEIGHT]
+    tube = [tube_pos[0], tube_pos[1], tube_pos[2] + tube_height]
 
     dx  = tgt_pos[0] - tube[0]
     dy  = tgt_pos[1] - tube[1]
@@ -160,10 +166,61 @@ def mortar_pitch(
     pitch_low  = math.atan(tan_low)
     pitch_high = math.atan(tan_high)
 
-    pitch_low  = max(C.MIN_PITCH, min(C.MAX_PITCH, pitch_low))
-    pitch_high = max(C.MIN_PITCH, min(C.MAX_PITCH, pitch_high))
-
     return (pitch_low, pitch_high), yaw
+
+
+def mortar_lead_aim(
+    me_pos: List[float],
+    tgt_pos: List[float],
+    tgt_vel: List[float],
+    tube_height: Optional[float] = None,
+    prefer_high: bool = True,
+    iters: int = 3,
+) -> Optional[Tuple[float, float, float]]:
+    """
+    Aim a mortar shell at where a moving target will be when the shell lands.
+
+    Iterates: solve the arc to the predicted point, compute the flight time
+    T = R / (v0·cos θ), move the predicted point to tgt + v·T, repeat.
+    Uses the high arc when it fits within the pitch limits, else the low arc.
+
+    Returns (yaw, pitch, flight_time) or None if no legal arc reaches it.
+    """
+    if tube_height is None:
+        tube_height = C.MECH_MORTAR_HEIGHT
+    v0 = C.MORTAR_SPEED
+    vx, vy = (tgt_vel[0], tgt_vel[1]) if tgt_vel else (0.0, 0.0)
+
+    aim_pt = list(tgt_pos)
+    sol = None
+    for _ in range(max(1, iters)):
+        res = mortar_pitch(me_pos, aim_pt, tube_height=tube_height)
+        if res is None:
+            return None
+        (p_low, p_high), yaw = res
+        legal = [p for p in ((p_high, p_low) if prefer_high else (p_low, p_high))
+                 if C.MIN_PITCH <= p <= C.MAX_PITCH]
+        if not legal:
+            return None
+        pitch = legal[0]
+        R = math.hypot(aim_pt[0] - me_pos[0], aim_pt[1] - me_pos[1])
+        T = R / max(1e-3, v0 * math.cos(pitch))
+        sol = (yaw, pitch, T)
+        aim_pt = [tgt_pos[0] + vx * T, tgt_pos[1] + vy * T, tgt_pos[2]]
+    return sol
+
+
+def gun_fire_tolerance_deg(dist: float, target_radius: float) -> float:
+    """
+    Largest aim error (deg) at which a gun shot still hits: the angle the
+    target's body subtends (80 % of its radius), but never below GUN_MIN_TOL_DEG.
+    """
+    ang = math.degrees(math.atan2(0.8 * target_radius, max(1.0, dist)))
+    return max(C.GUN_MIN_TOL_DEG, ang)
+
+
+def _wrap(a: float) -> float:
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +257,9 @@ class LaserController:
              t: float,
              weapon_obs: Optional[dict],
              target_visible: bool,
-             aim_error_deg: float) -> Tuple[bool, bool]:
+             aim_error_deg: float,
+             release_tol_deg: float = 1.5,
+             full_charge: Optional[float] = None) -> Tuple[bool, bool]:
         """
         Decide fire[1] for this tick.
 
@@ -255,8 +314,12 @@ class LaserController:
                 self.state = LaserState.READY
                 return False, True  # release trigger
 
-            # Release at full charge when aim is tight
-            if charge >= C.LASER_CHARGE_TIME * 0.93 and aim_error_deg <= 1.5:
+            # Release at (near) full charge once the beam would land on the target body.
+            # release_tol_deg is the target's angular size plus slack, so it is
+            # reachable while both mechs move (a fixed 1.5° rarely was).
+            if full_charge is None:
+                full_charge = C.LASER_CHARGE_TIME
+            if charge >= full_charge * 0.93 and aim_error_deg <= release_tol_deg:
                 self.state = LaserState.COOLDOWN   # will confirm when obs updates
                 return False, False   # release = fire
 
@@ -270,11 +333,13 @@ class LaserController:
 # 3. Target selection
 # ---------------------------------------------------------------------------
 
-def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0) -> Optional[dict]:
+def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0,
+                  attackers: Optional[Dict[int, float]] = None) -> Optional[dict]:
     """
     Choose highest-priority target:
-      1. T0 enemy mech with direct LOS (lowest HP first)
-      2. T0 enemy mech without direct LOS (lowest HP first)
+      1. T0 enemy mech with direct LOS, ranked by a score mixing distance, HP,
+         who is shooting us right now, and laser cook-off on mortar carriers
+      2. T0 enemy mech without direct LOS (same score)
       3. T1 enemy mech from tracker beliefs
       4. If no enemy mechs & cubes < 10:
          - Nearest NPC drone within 70m with LOS (drops 2 cubes)
@@ -288,15 +353,29 @@ def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0) 
     t0_mechs = [m for m in obs.get("mechs", []) if m["kind"] == "mech"]
 
     if t0_mechs:
-        def target_rank(m):
-            tx, ty, tz = m["pos"]
-            has_los = True
-            if world is not None:
-                has_los = world.has_los_2d(my_x, my_y, my_z + muzzle_h, tx, ty, tz + 4.5)
-            # LOS first (0 = yes, 1 = no), then lowest HP, then distance
-            return (0 if has_los else 1, m.get("hp", 9999), _dist2d(my_x, my_y, tx, ty))
+        t_now = obs.get("t", 0.0)
+        w = me.get("weapons", [None, None])
+        my_laser = len(w) > 1 and w[1] is not None and w[1].get("kind") == "laser"
 
-        return min(t0_mechs, key=target_rank)
+        def score(m):
+            tx, ty = m["pos"][0], m["pos"][1]
+            s = _dist2d(my_x, my_y, tx, ty) + 0.05 * m.get("hp", 1400)
+            if attackers and t_now - attackers.get(m["id"], -1e9) < 2.0:
+                s -= 60.0          # whoever is hurting us right now
+            if my_laser and "mortar" in (m.get("weapons") or []):
+                s -= 30.0          # cook-off: +60 % laser damage
+            return s
+
+        # Best score with a clear shot wins. LOS rays are the expensive part,
+        # so only the 4 best-scored candidates get one.
+        ranked = sorted(t0_mechs, key=score)
+        if world is None:
+            return ranked[0]
+        for m in ranked[:4]:
+            tx, ty, tz = m["pos"]
+            if world.has_los_2d(my_x, my_y, my_z + muzzle_h, tx, ty, tz + 4.5):
+                return m
+        return ranked[0]
 
     # --- 2. T1 tracker beliefs ---
     t1 = [v for v in tracker_beliefs.values() if v.get("tier") == 1 and v.get("kind") == "mech"]
@@ -413,6 +492,26 @@ class CombatController:
         self._vel_alpha    = 0.5    # EMA weight for new observations
         self._smoothed_vel: Dict[int, List[float]] = {}
         self._last_pos:     Dict[int, List[float]] = {}
+        # Who shot us and when (match time), and when we last took weapon damage
+        self._attackers:    Dict[int, float] = {}
+        self._last_hurt_t:  float = -1e9
+        # Current target (read by motion.py for positioning)
+        self.target: Optional[dict] = None
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _residual_err_deg(aim: List[float], yaw: float, pitch: float,
+                          dt: float, turn_rate: float, pitch_rate: float) -> float:
+        """
+        Aim error (deg) left after the torso slews for `dt` seconds toward
+        (yaw, pitch). A held trigger fires on the first sim tick the weapon is
+        ready, by which time the torso has already turned some of the way.
+        """
+        dyaw = abs(_wrap(aim[0] - yaw))
+        dpitch = abs(aim[1] - pitch)
+        ry = max(0.0, dyaw - turn_rate * dt)
+        rp = max(0.0, dpitch - pitch_rate * dt)
+        return math.degrees(math.hypot(ry * math.cos(pitch), rp))
 
     # ------------------------------------------------------------------
     def _smooth_velocity(self, actor_id: int, pos: List[float],
@@ -456,8 +555,10 @@ class CombatController:
         cubes    = me.get("cubes", 0)
         weapons  = me.get("weapons", [None, None])
         aim      = me.get("aim", [0.0, 0.0])  # actual slewed torso aim
-        muzzle_h = me.get("stats", {}).get("muzzle_height", C.MECH_MUZZLE_HEIGHT)
-        pickup_radius = obs.get("config", {}).get("loot", {}).get("pickup_radius", 4.0)
+        stats    = me.get("stats", {}) or {}
+        muzzle_h = stats.get("muzzle_height", C.MECH_MUZZLE_HEIGHT)
+        tube_h   = stats.get("height", C.MECH_HEIGHT) + 0.5   # mortar tube: height + 0.5
+        pickup_radius = C.PICKUP_RADIUS
 
         action: dict = {}
 
@@ -470,6 +571,12 @@ class CombatController:
         for event in obs.get("events", []):
             if event.get("type") == "effect" and event.get("effect") == "short":
                 self._laser.notify_shorted(t)
+            elif event.get("type") == "damaged" and event.get("weapon") != "zone":
+                self._last_hurt_t = t
+                if event.get("by") is not None:
+                    self._attackers[int(event["by"])] = t
+        turn_rate  = stats.get("turn_rate", C.TURN_RATE)
+        pitch_rate = stats.get("pitch_rate", C.PITCH_RATE)
 
         # ---- Weapon pickup (with 3D distance check) ----
         for pickup in obs.get("pickups", []):
@@ -484,7 +591,9 @@ class CombatController:
                 break
 
         # ---- Select target (including NPC/crate farming) ----
-        target = select_target(obs, tracker_beliefs, world=world, cubes=cubes)
+        target = select_target(obs, tracker_beliefs, world=world, cubes=cubes,
+                               attackers=self._attackers)
+        self.target = target
 
         # ---- Active Torso Scanning when no target ----
         if target is None:
@@ -506,10 +615,11 @@ class CombatController:
             self._last_aim = list(action["aim"])
             action["fire"] = [False, False]
 
-            # Auto-reload if empty
+            # Reload during quiet moments so a fight starts with a full magazine
             w0 = weapons[0] if weapons else None
             if w0 and w0.get("kind") == "gun":
-                if w0.get("ammo", 1) == 0 and w0.get("reload", 0.0) == 0.0:
+                mag = (w0.get("stats") or {}).get("mag", C.GUN_MAG)
+                if w0.get("reload", 0.0) == 0.0 and w0.get("ammo", mag) < mag * 0.5:
                     action["reload"] = True
             return action
 
@@ -521,12 +631,14 @@ class CombatController:
 
         dist_to_target = _dist2d(pos[0], pos[1], tgt_pos[0], tgt_pos[1])
 
-        # Target center of mass (mech: +4.5m, npc: +1.8m, crate: +1.0m)
-        tgt_h = 4.5
+        # Target center of mass (mech: +4.5m, npc: +1.8m, crate: +1.0m) and body radius
+        tgt_h, tgt_r = 4.5, C.MECH_RADIUS
         if target.get("kind") == "npc":
-            tgt_h = 1.8
+            tgt_h, tgt_r = 1.8, 1.8
         elif target.get("kind") == "crate":
-            tgt_h = 1.0
+            tgt_h, tgt_r = 1.0, 1.4
+        dist_3d = math.hypot(dist_to_target,
+                             (tgt_pos[2] + tgt_h) - (pos[2] + muzzle_h))
 
         # ---- Check Line of Sight ----
         has_los = True
@@ -560,13 +672,20 @@ class CombatController:
             w0_cooldown = w0.get("cooldown", 0.0)
             w0_reload   = w0.get("reload", 0.0)
 
-            if w0_ammo == 0 and w0_reload == 0.0:
-                action["reload"] = True
+            mag = (w0.get("stats") or {}).get("mag", C.GUN_MAG)
+            if w0_reload == 0.0 and (w0_ammo == 0 or (not has_los and w0_ammo < mag * 0.5)):
+                action["reload"] = True   # empty, or a lull behind cover
 
-            # Fire whenever cooldown is up, in range, within 25° cone, AND WE HAVE LOS!
-            if w0_cooldown <= 0.01 and dist_to_target <= C.GUN_RANGE and has_los:
-                err_deg = self._aim_error_deg(aim, aim_yaw, aim_pitch)
-                if err_deg <= 25.0:
+            # HOLD the trigger whenever the shot would land: the server then fires
+            # at the full cyclic rate the instant the cooldown ends (releasing until
+            # cooldown == 0 cost ~20 % of our DPS). "Would land" = the aim error
+            # left after the torso slews until the shot goes off is within the
+            # target's angular size plus a little slack.
+            gun_range = (w0.get("stats") or {}).get("range", C.GUN_RANGE)
+            if dist_to_target <= gun_range and has_los and w0_ammo > 0:
+                dt = min(0.1, max(0.0, w0_cooldown))
+                err_deg = self._residual_err_deg(aim, aim_yaw, aim_pitch, dt, turn_rate, pitch_rate)
+                if err_deg <= gun_fire_tolerance_deg(dist_3d, tgt_r) + C.GUN_EXTRA_TOL_DEG:
                     fire0 = True
 
         # ---- Slot 1 weapon fire decision ----
@@ -582,10 +701,22 @@ class CombatController:
             dz = (tgt_pos[2] + tgt_h) - (pos[2] + muzzle_h)
             las_yaw   = math.atan2(dy, dx)
             las_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, math.atan2(dz, math.hypot(dx, dy))))
-            las_err   = self._aim_error_deg(aim, las_yaw, las_pitch)
+            las_err   = self._residual_err_deg(aim, las_yaw, las_pitch, 0.0, turn_rate, pitch_rate)
+            las_tol   = gun_fire_tolerance_deg(dist_3d, tgt_r) + C.LASER_EXTRA_TOL_DEG
+            las_range = (w1.get("stats") or {}).get("range", C.LASER_RANGE)
+            full_chg  = (w1.get("stats") or {}).get("charge", C.LASER_CHARGE_TIME)
+
+            # Weapon triangle: lightning shorts a charging laser — don't start a
+            # charge inside an enemy lightning's reach.
+            short_risk = ("lightning" in (target.get("weapons") or [])
+                          and dist_to_target <= C.LIGHTNING_RANGE + 10.0
+                          and (w1.get("charge", 0.0) or 0.0) <= 0.0)
 
             # Only charge and fire laser if we have direct line of sight!
-            hold, cancel = self._laser.step(t, w1, target_visible and has_los, las_err)
+            hold, cancel = self._laser.step(
+                t, w1,
+                target_visible and has_los and dist_to_target <= las_range and not short_risk,
+                las_err, release_tol_deg=las_tol, full_charge=full_chg)
             fire1 = hold and has_los
             if w1 and w1.get("charge", 0.0) > 0.05:
                 action["aim"] = [las_yaw, las_pitch]
@@ -616,34 +747,53 @@ class CombatController:
                     if cluster_aim_pos is not None:
                         break
 
-            chosen_mortar_tgt = cluster_aim_pos if cluster_aim_pos is not None else tgt_pos
+            if cluster_aim_pos is not None:
+                chosen_mortar_tgt, chosen_vel = cluster_aim_pos, [0.0, 0.0, 0.0]
+            else:
+                chosen_mortar_tgt, chosen_vel = tgt_pos, tgt_vel
             chosen_mortar_dist = _dist2d(pos[0], pos[1], chosen_mortar_tgt[0], chosen_mortar_tgt[1])
 
             if chosen_mortar_dist > C.MORTAR_MIN_RANGE:
-                result = mortar_pitch(tube_pos, chosen_mortar_tgt, high_arc=True)
+                # Lead the shell: aim where the target will be when it lands.
+                result = mortar_lead_aim(tube_pos, chosen_mortar_tgt, chosen_vel,
+                                         tube_height=tube_h, prefer_high=True)
                 if result is not None:
-                    (pitch_low, pitch_high), mort_yaw = result
-                    mort_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, pitch_high))
+                    mort_yaw, mort_pitch, _flight_t = result
 
-                    # Fix Mortar Aim Hijack: Only hijack torso aim when mortar is ready to fire
-                    # AND (cluster detected OR target is behind cover OR far away > 45 m)! Otherwise keep Gun lead aim.
+                    # Only hijack torso aim when mortar is ready AND (cluster, target
+                    # behind cover, or far away > 45 m). Otherwise keep the gun lead aim.
                     if mort_cd <= 0.05 and (cluster_aim_pos is not None or not has_los or dist_to_target > 45.0):
                         action["aim"] = [mort_yaw, mort_pitch]
-                        if mort_cd <= 0.01:
+                        # Shells leave along the ACTUAL torso aim: wait until it has
+                        # slewed onto the lob before pulling the trigger.
+                        if mort_cd <= 0.01 and self._residual_err_deg(
+                                aim, mort_yaw, mort_pitch, 0.05, turn_rate, pitch_rate) <= C.MORTAR_AIM_TOL_DEG:
                             fire1 = True
 
         elif w1_kind == "lightning" and target.get("kind") != "crate":
-            if dist_to_target <= C.LIGHTNING_RANGE * 0.9 and has_los:
-                me_energy = me.get("energy", 0.0)
-                if me_energy >= C.LIGHTNING_ENERGY * 2:
-                    lt_cd = w1.get("cooldown", 0.0)
-                    if lt_cd <= 0.01:
-                        fire1 = True
+            # The arc only finds a target inside cone_deg of the ACTUAL aim yaw;
+            # outside it, a shot just burns energy into the nearest wall.
+            bearing = math.atan2(tgt_pos[1] - pos[1], tgt_pos[0] - pos[0])
+            in_cone = math.degrees(abs(_wrap(bearing - aim[0]))) <= C.LIGHTNING_CONE_DEG * 0.9
+            lt_range = (w1.get("stats") or {}).get("range", C.LIGHTNING_RANGE)
+            lt_energy = (w1.get("stats") or {}).get("energy", C.LIGHTNING_ENERGY)
+            if dist_to_target <= lt_range * 0.9 and has_los and in_cone:
+                if me.get("energy", 0.0) >= lt_energy * 2:
+                    # Hold the trigger: it fires the instant the cooldown ends
+                    fire1 = True
 
-        # ---- Fix DISENGAGE_REGEN Self-Sabotage ----
-        # In DISENGAGE_REGEN, hold fire unless enemy is dangerously close (< 25 m)
-        # to allow the 5.0 s out-of-combat HP regeneration to trigger!
-        if state == "DISENGAGE_REGEN" and dist_to_target > 25.0:
+            # Laser wants half the move speed while charging, lightning wants us
+            # close: point the torso straight at the target (instant weapon, no lead)
+            if fire1:
+                dz = (tgt_pos[2] + tgt_h) - (pos[2] + muzzle_h)
+                action["aim"] = [bearing, max(C.MIN_PITCH, min(C.MAX_PITCH,
+                                 math.atan2(dz, max(0.1, dist_to_target))))]
+
+        # ---- Retreating: shoot back unless we've actually broken contact ----
+        # Holding fire only helps regen once nobody is hitting us; while a
+        # hunter is still landing shots, regen can't start anyway, so return fire.
+        if state == "DISENGAGE_REGEN" and dist_to_target > 25.0 \
+                and t - self._last_hurt_t > C.REGEN_QUIET_S:
             fire0 = False
             fire1 = False
 

@@ -154,6 +154,10 @@ FIRE_CONFIDENCE_T3: float = 0.15  # T3 — sound bearing only: suppress
 
 MRM_CANDIDATES: int      = 16     # candidate directions sampled per tick
 MRM_RADIUS: float        = 15.0   # m radius of candidate ring
+MRM_LOS_MAX_ENEMIES: int = 4      # LOS-score only the nearest N enemies (latency cap)
+MRM_LOS_RANGE: float     = 150.0  # m — ignore enemies beyond this for LOS scoring
+MRM_LOS_STEP_M: float    = 4.0    # coarser ray step for movement scoring (heuristic only)
+MRM_TIME_BUDGET_S: float = 0.012  # drop LOS scoring if it runs past this
 
 # Risk component weights — positive = penalty, negative = bonus
 W_ENEMY_PROXIMITY: float = 100.0  # / dist² per enemy
@@ -161,6 +165,56 @@ W_ZONE_NEAR_BORDER: float = 50.0  # gradient within 10 m of zone edge
 W_ZONE_OOB: float        = 1e6    # effectively infinite penalty outside zone
 W_ROOF_BONUS: float      = -200.0 # negative = incentive to move onto a roof
 W_REVERSAL: float        = 30.0   # penalty for 180° direction flip (jitter prevention)
+
+# ---------------------------------------------------------------------------
+# 6b. NAVIGATION (nav.py)
+# ---------------------------------------------------------------------------
+NAV_CELL_M: float      = 5.0     # walkability grid cell size
+NAV_BUDGET_S: float    = 0.006   # max A* time per tick in combat
+NAV_BUDGET_CALM_S: float = 0.012 # max A* time per tick when no enemy is in view
+NAV_MAX_EXPAND: int    = 6000    # node cap for one-shot NavGrid.astar (tests/tools)
+NAV_GOAL_MOVE_M: float = 10.0    # restart the search when the goal moves this far
+
+# ---------------------------------------------------------------------------
+# 6c. COMBAT MOVEMENT (motion.py)
+# ---------------------------------------------------------------------------
+# Preferred (min, max) distance to the target by the weapon we fight with
+BAND_GUN: tuple       = (45.0, 110.0)
+BAND_LASER: tuple     = (60.0, 140.0)
+BAND_MORTAR: tuple    = (70.0, 170.0)
+BAND_LIGHTNING: tuple = (12.0, 35.0)
+BAND_NPC: tuple       = (20.0, 45.0)
+LIGHTNING_KEEPOUT_M: float = 55.0  # stay out of an enemy's lightning when we don't hold one
+STRAFE_FLIP_MIN_S: float   = 0.35  # strafe direction flips on a random timer in [min, max]
+STRAFE_FLIP_MAX_S: float   = 0.60
+STRAFE_WEIGHT: float       = 1.0
+RADIAL_WEIGHT: float       = 0.8
+FAR_APPROACH_M: float      = 40.0  # beyond band max + this, path-find toward the target
+STRAFE_BOOST_ENERGY: float = 60.0  # boost-strafe only above this energy
+DODGE_BOOST_ENERGY: float  = 15.0  # boost on an urgent dodge above this energy
+DODGE_WEIGHT: float        = 2.0
+LASER_DODGE_DEG: float     = 10.0  # enemy charging a laser aimed within this of us → sidestep
+BULLET_DANGER_M: float     = 1.5   # extra miss margin around our body for bullets
+SPLASH_DANGER_M: float     = 3.0   # extra margin around mortar splash radius
+PEEK_ON_RELOAD: bool       = True  # break LOS while the gun reloads
+OTHER_FOE_PUSH: float      = 0.5   # push away from secondary enemies within 60 m
+
+# ---------------------------------------------------------------------------
+# 6d. LOOT & SUPPLY DROPS (motion.py)
+# ---------------------------------------------------------------------------
+LOOT_EARLY_S: float     = 90.0    # first this many seconds: loot far
+LOOT_RANGE_EARLY: float = 150.0
+LOOT_RANGE: float       = 70.0
+CRATE_STANDOFF_M: float = 20.0    # stop this far from a crate and shoot it
+LOOT_FORGET_R: float    = 30.0    # forget remembered loot we're near but no longer see
+LOOT_MAX_AGE_S: float   = 90.0
+DROP_RANGE: float       = 220.0   # go for supply drops within this distance
+DROP_ENEMY_CLEAR_M: float = 40.0  # skip a drop with an enemy mech this close to it
+
+# Fire control
+GUN_EXTRA_TOL_DEG: float   = 1.0   # aim slack on top of target size for the gun
+LASER_EXTRA_TOL_DEG: float = 1.5   # aim slack on top of target size for the laser
+REGEN_QUIET_S: float       = 1.5   # in DISENGAGE, hold fire only after this long unhurt
 
 # Distance thresholds inside which we switch from MRM to direct flee
 PANIC_RANGE: float       = 25.0   # m — enemy too close to MRM: hard flee
@@ -183,8 +237,13 @@ ROOF_ARRIVAL_Z: float      = 2.0   # m vertical tolerance
 # AMBUSH / COMBAT
 ENGAGE_RANGE: float        = 220.0 # m — engage if enemy is within this range
 LASER_ENGAGE_RANGE: float  = 270.0 # m — laser has extra range; prefer laser engages
-DISENGAGE_HP: float        = 700.0 # HP — below this, disengage
-REGEN_RESUME_HP: float     = 1150.0 # HP — above this, re-engage
+DISENGAGE_HP_FRAC: float   = 0.40  # fraction of max HP — below this (with threats), disengage
+REGEN_RESUME_FRAC: float   = 0.75  # fraction of max HP — above this, re-engage
+GUN_MIN_TOL_DEG: float     = 0.8   # minimum aim tolerance for firing the gun (deg)
+MORTAR_AIM_TOL_DEG: float  = 2.0   # torso must be within this of the lob aim before firing
+PICKUP_RADIUS: float       = 4.0   # loot.pickup_radius (overwritten from hello.config)
+LOS_STEP_M: float          = 3.0   # line-of-sight sampling step (m)
+DEAD_RECKON_MAX_S: float   = 1.0   # stop extrapolating a lost track after this long
 MULTI_ENEMY_THRESHOLD: int = 2     # if >= this many enemies visible, disengage
 LOS_BREAK_DIST: float      = 8.0   # m — step back this far from roof edge to hide
 
@@ -241,6 +300,13 @@ CLIMB_FORWARD_FRAC: float = 0.8
 # Energy safety floor — don't jet if energy is below this (saves for escape)
 ENERGY_CLIMB_FLOOR: float = 20.0
 
+# Rooftop climbing is EXPERIMENTAL and OFF by default: the jump/jet physics
+# could not be tested offline. Turn on only after checking it in replays.
+ROOF_CLIMB_ENABLED: bool  = False
+CLIMB_MIN_ENERGY: float   = 90.0   # need nearly full energy to start a climb
+CLIMB_MAX_DZ: float       = 25.0   # only roofs at most this high above the ground
+CLIMB_TIMEOUT_S: float    = 6.0    # give up a climb attempt after this long
+
 # ---------------------------------------------------------------------------
 # 10. DEBUG-DRAW COLOURS
 # ---------------------------------------------------------------------------
@@ -288,6 +354,8 @@ def update_from_config(cfg: dict) -> None:
         ("ENERGY_REGEN_DELAY", "energy_regen_delay"),
         ("TURN_RATE",          "turn_rate"),
         ("PITCH_RATE",         "pitch_rate"),
+        ("MIN_PITCH",          "min_pitch"),
+        ("MAX_PITCH",          "max_pitch"),
         ("REGEN_DELAY",        "regen_delay"),
         ("REGEN_PER_S",        "regen_per_s"),
         ("REAR_MULT",          "rear_mult"),
@@ -368,3 +436,10 @@ def update_from_config(cfg: dict) -> None:
     ]:
         if key in cubes: setattr(_m, attr, float(cubes[key]))
     if "stat_cap" in cubes: _m.STAT_CAP_CUBES = int(cubes["stat_cap"])
+
+    # Loot
+    loot = cfg.get("loot", {})
+    if "pickup_radius" in loot: _m.PICKUP_RADIUS = float(loot["pickup_radius"])
+
+    # Derived: mortar tube sits half a metre above the mech's head
+    _m.MECH_MORTAR_HEIGHT = _m.MECH_HEIGHT + 0.5

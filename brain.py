@@ -61,14 +61,19 @@ class Brain:
             self._transition(self.ENDGAME_SURVIVAL)
             return self.state
 
-        # 2. Critical health escape: only disengage if HP is dangerously low (< 350) and facing threats
-        if hp < 350.0 and (threat_count >= 1 or any_visible):
+        max_hp = me.get("max_hp", C.HP_DEFAULT) or C.HP_DEFAULT
+        recent_threat = tracker.recent_mech_threat()
+
+        # 2. Health escape: disengage below DISENGAGE_HP_FRAC of max HP while an
+        #    enemy mech is visible (scales with plating / cube HP bonuses)
+        if hp < max_hp * C.DISENGAGE_HP_FRAC and any_visible:
             self._transition(self.DISENGAGE_REGEN)
             return self.state
 
-        # 3. If in DISENGAGE_REGEN, return to combat once recovered or threat clear
+        # 3. Stay disengaged until HP has recovered or no enemy mech has been
+        #    seen recently (T0/T1), so we don't re-engage the moment LOS breaks
         if self.state == self.DISENGAGE_REGEN:
-            if hp >= 700.0 or not any_visible:
+            if hp >= max_hp * C.REGEN_RESUME_FRAC or not recent_threat:
                 self._transition(self.AMBUSH_HUNTER if any_visible else self.BOOTSTRAP_LOOT)
             return self.state
 

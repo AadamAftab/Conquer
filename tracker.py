@@ -48,6 +48,7 @@ class BeliefEntry:
     max_hp:    Optional[float] = None
     weapons:   List[str] = field(default_factory=list)
     charging:  bool = False
+    aim:       Optional[List[float]] = None   # torso [yaw, pitch] (laser telegraph, rear arc)
     last_seen_t: float = -999.0   # match time (s) of last T0 observation
     last_heard_t: float = -999.0  # match time (s) of last T3 sound
     # For T2: search radius around pos estimate
@@ -116,6 +117,8 @@ class EpistemicTracker:
             if "max_hp"  in actor: entry.max_hp  = actor["max_hp"]
             if "weapons" in actor: entry.weapons = list(actor.get("weapons", []))
             entry.charging = actor.get("charging", False)
+            if "aim" in actor:
+                entry.aim = list(actor["aim"])
 
         # --- Step 2: Age non-visible entries ---
         for aid, entry in list(self.beliefs.items()):
@@ -130,14 +133,17 @@ class EpistemicTracker:
             elif age <= self._MEMORY_S:
                 # T1: server memory window — keep last known pos/vel
                 entry.tier       = 1
+                entry.charging   = False   # can't see the telegraph any more
                 entry.confidence = C.FIRE_CONFIDENCE_T1
-                # Dead-reckon position with constant velocity
-                dt_since_seen = age
-                entry.pos = [
-                    entry.pos[0] + entry.vel[0] * C.TICK_DT,
-                    entry.pos[1] + entry.vel[1] * C.TICK_DT,
-                    entry.pos[2] + entry.vel[2] * C.TICK_DT,
-                ]
+                # Dead-reckon with constant velocity, but only briefly: a mech that
+                # broke LOS has usually turned or stopped, so long extrapolation
+                # just drives the track into walls.
+                if age <= C.DEAD_RECKON_MAX_S:
+                    entry.pos = [
+                        entry.pos[0] + entry.vel[0] * C.TICK_DT,
+                        entry.pos[1] + entry.vel[1] * C.TICK_DT,
+                        entry.pos[2],
+                    ]
                 entry.uncertainty_radius = age * 2.0   # grows with time
             elif age <= self._STALE_DROP_S:
                 # T2: stale particle cloud
@@ -211,6 +217,8 @@ class EpistemicTracker:
     def _in_fov(self, my_x: float, my_y: float, my_aim_yaw: float,
                 tx: float, ty: float) -> bool:
         """True if (tx,ty) is inside our forward FOV cone."""
+        if math.hypot(tx - my_x, ty - my_y) > C.VISION_RANGE:
+            return False
         to_tgt_yaw = math.atan2(ty - my_y, tx - my_x)
         angle_diff  = abs(to_tgt_yaw - my_aim_yaw)
         angle_diff  = min(angle_diff, 2 * math.pi - angle_diff)
@@ -227,16 +235,13 @@ class EpistemicTracker:
         """
         Apply the two contradiction rules to remove impossible beliefs.
         """
-        # --- Counting Rule ---
-        max_enemies = alive_count - 1
-        if len(self.beliefs) > max_enemies:
-            # Remove oldest/lowest-confidence entries until count is sane
-            sorted_beliefs = sorted(
-                self.beliefs.items(),
-                key=lambda kv: (kv[1].tier, -kv[1].last_seen_t),
-                reverse=True,
-            )
-            for aid, _ in sorted_beliefs[max_enemies:]:
+        # --- Counting Rule (mechs only: `alive` does not count NPC drones) ---
+        max_enemies = max(0, alive_count - 1)
+        mech_items = [kv for kv in self.beliefs.items() if kv[1].kind == "mech"]
+        if len(mech_items) > max_enemies:
+            # Keep the best tracks: lowest tier first, then most recently seen
+            mech_items.sort(key=lambda kv: (kv[1].tier, -kv[1].last_seen_t))
+            for aid, _ in mech_items[max_enemies:]:
                 del self.beliefs[aid]
 
         # --- Empty-View Rule ---
@@ -269,9 +274,13 @@ class EpistemicTracker:
         return sorted(candidates, key=lambda b: (b.hp or 9999, b.tier))
 
     def any_visible(self) -> bool:
-        """True if any T0 mech is currently visible."""
-        return any(b.tier == 0 for b in self.beliefs.values())
+        """True if any enemy MECH is currently visible (NPC drones excluded)."""
+        return any(b.tier == 0 and b.kind == "mech" for b in self.beliefs.values())
 
     def threat_count(self) -> int:
-        """Number of T0 threats visible right now."""
-        return sum(1 for b in self.beliefs.values() if b.tier == 0)
+        """Number of enemy MECHS visible right now (NPC drones excluded)."""
+        return sum(1 for b in self.beliefs.values() if b.tier == 0 and b.kind == "mech")
+
+    def recent_mech_threat(self) -> bool:
+        """True if any enemy mech is visible or still in recent memory (T0/T1)."""
+        return any(b.tier <= 1 and b.kind == "mech" for b in self.beliefs.values())

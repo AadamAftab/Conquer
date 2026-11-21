@@ -45,6 +45,7 @@ from tracker import EpistemicTracker
 from brain import Brain
 from combat import CombatController
 from motion import MotionController
+from nav import NavGrid, PathFollower
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +86,22 @@ class Bot:
         mf.log(f"Bot: WorldIndex loaded — {len(self.world.rooftops)} rooftops, "
                f"{len(self.world.prisms)} prisms")
 
-        # 4. Subsystem controllers
+        # 4. Walkability grid for path-finding (~1.5 s; inside the 20 s hello budget)
+        t_nav = time.perf_counter()
+        try:
+            grid = NavGrid(self.world)
+        except Exception as exc:          # never let a nav bug stop the bot from starting
+            mf.log(f"Bot: NavGrid failed ({exc!r}) — straight-line movement only")
+            grid = None
+        mf.log(f"Bot: NavGrid {'ready' if grid is not None and grid.ok else 'unavailable'} "
+               f"in {(time.perf_counter() - t_nav) * 1000:.0f} ms")
+
+        # 5. Subsystem controllers
         self.tracker = EpistemicTracker()
         self.brain   = Brain()
         self.combat  = CombatController()
-        self.motion  = MotionController()
+        self.motion  = MotionController(nav=PathFollower(grid),
+                                        seed=int(hello.get("seed", 0) or 0))
 
         # 5. Stale-action cache — returned on hard-deadline miss
         self._last_move: List[float] = [0.0, 0.0]
@@ -143,11 +155,12 @@ class Bot:
         ground_z = self.world.terrain_height(pos[0], pos[1])
         is_on_roof = grounded and (pos[2] - ground_z) > C.ROOF_ARRIVAL_Z * 2.0
 
-        # Build enemy position list from tracker (T0 + T1 only)
+        # Build enemy position list from tracker (T0 + T1 mechs only; NPC drones
+        # are farm targets, not threats to kite from or charge at)
         enemy_positions: List[List[float]] = [
             b.pos
             for b in self.tracker.beliefs.values()
-            if b.tier <= 1
+            if b.tier <= 1 and b.kind == "mech"
         ]
 
         # Rooftop navigation goal (inside next zone)
@@ -210,6 +223,19 @@ class Bot:
         # ================================================================
         combat_aim = combat_action.get("aim")  # may be None if no target
 
+        # Enemy mechs with what motion needs for dodging/positioning
+        enemies = [
+            {"id": b.id, "pos": b.pos, "vel": b.vel, "aim": b.aim,
+             "weapons": b.weapons, "charging": b.charging, "tier": b.tier}
+            for b in self.tracker.beliefs.values()
+            if b.tier <= 1 and b.kind == "mech"
+        ]
+        # Path planning gets whatever is left of the soft deadline (capped)
+        remaining = C.SOFT_DEADLINE_S - (time.perf_counter() - t_start)
+        cap = C.NAV_BUDGET_S if enemies else C.NAV_BUDGET_CALM_S
+        nav_budget = max(0.0, min(cap, remaining - 0.004))
+        mrm_budget = max(0.002, min(C.MRM_TIME_BUDGET_S, remaining - 0.006))
+
         motion_action = self.motion.decide(
             obs          = obs,
             state        = state,
@@ -218,7 +244,12 @@ class Bot:
             combat_aim   = combat_aim,
             is_on_roof   = is_on_roof,
             world        = self.world,
+            enemies      = enemies,
+            target       = self.combat.target,
+            nav_budget_s = nav_budget,
+            mrm_budget_s = mrm_budget,
         )
+        mf.draw.label(f"{state[:10]} {self.motion.debug_mode}")
 
         # ================================================================
         # Step 7 — Merge partial actions
@@ -238,8 +269,11 @@ class Bot:
         # Final hard-deadline safety (should rarely trigger at this point)
         t_end = time.perf_counter()
         elapsed_ms = (t_end - t_start) * 1000.0
-        if elapsed_ms > 45.0:   # close to 50 ms wall
-            mf.log(f"Bot: WARNING — tick took {elapsed_ms:.1f} ms")
+        if elapsed_ms > 30.0:   # getting close to the 50 ms wall: say where it went
+            mf.log(f"Bot: slow tick {obs.get('tick')} {elapsed_ms:.1f} ms — "
+                   f"pre-combat {(t_mid - t_start) * 1000:.1f}, "
+                   f"combat {(t_before_motion - t_mid) * 1000:.1f}, "
+                   f"motion {(t_end - t_before_motion) * 1000:.1f} ({self.motion.debug_mode})")
 
         return action
 

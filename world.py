@@ -23,6 +23,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+import config as C
 import mechfight as mf
 
 # ---------------------------------------------------------------------------
@@ -213,10 +214,12 @@ class WorldIndex:
             self._tmin_x = self._tmin_y = 0.0
             self.prisms = []
             self.rooftops = []
+            self.bounds = None
             return
 
         with open(world_path, "r") as fh:
             world = json.load(fh)
+        self.bounds = world.get("bounds")
 
         terrain_meta = world["terrain"]
         self._terrain, self._tnx, self._tny, \
@@ -353,7 +356,8 @@ class WorldIndex:
 
     def has_los_2d(self,
                    x0: float, y0: float, z0: float,
-                   x1: float, y1: float, z1: float) -> bool:
+                   x1: float, y1: float, z1: float,
+                   step: Optional[float] = None) -> bool:
         """
         Line-of-sight check between two 3D points.
         Steps along the 2D segment (every 3.0 m), interpolates z linearly (z = z0 + (z1 - z0) * t),
@@ -366,16 +370,28 @@ class WorldIndex:
         if dist < 0.1:
             return True
 
-        # Step every 3.0 m along the segment
-        steps = max(2, int(math.ceil(dist / 3.0)))
+        # Step every LOS_STEP_M along the segment (finer than most wall thicknesses)
+        steps = max(2, int(math.ceil(dist / (step or C.LOS_STEP_M))))
         current_cell = None
         cell_prisms = []
+        terrain = self._terrain
+        if terrain is not None:
+            t_nx, t_ny = self._tnx, self._tny
+            t_mx, t_my = self._tmin_x, self._tmin_y
+            t_inv = 1.0 / self._tstep
 
         for s in range(1, steps):
             t = s / steps
             mx = x0 + (x1 - x0) * t
             my = y0 + (y1 - y0) * t
             mz = z0 + (z1 - z0) * t
+
+            # Hills block shots and sight too (nearest 1 m terrain cell, inlined for speed)
+            if terrain is not None:
+                ti = int((mx - t_mx) * t_inv + 0.5)
+                tj = int((my - t_my) * t_inv + 0.5)
+                if 0 <= ti < t_nx and 0 <= tj < t_ny and mz * 100.0 < terrain[tj * t_nx + ti]:
+                    return False
 
             cell = (int(mx // self.CELL_SIZE), int(my // self.CELL_SIZE))
             if cell != current_cell:

@@ -18,6 +18,7 @@ safely inside the Docker sandbox with zero extra dependencies.
 from __future__ import annotations
 
 import math
+import time
 from typing import List, Optional, Tuple
 
 import config as C
@@ -47,10 +48,14 @@ def compute_mrm(
     prev_dir:     Optional[Vec2] = None,  # previous movement direction
     world = None,
     state: str = "",
+    time_budget_s: Optional[float] = None,
 ) -> Vec2:
     """
     Evaluate MRM and return the best (dx, dy) normalised movement direction.
+    LOS scoring is dropped if it would run past time_budget_s.
     """
+    if time_budget_s is None:
+        time_budget_s = C.MRM_TIME_BUDGET_S
     sx, sy = pos[0], pos[1]
     n      = C.MRM_CANDIDATES     # 16 candidates
     r      = C.MRM_RADIUS         # 15 m ring radius
@@ -59,7 +64,17 @@ def compute_mrm(
     best_dx   = 0.0
     best_dy   = 0.0
 
-    for k in range(n):
+    # LOS scoring is the expensive part (16 candidates x enemies x ray samples).
+    # Only the nearest few enemies within range matter for cover/crossfire.
+    los_enemies = sorted(
+        (ep for ep in enemy_positions
+         if math.hypot(ep[0] - sx, ep[1] - sy) <= C.MRM_LOS_RANGE),
+        key=lambda ep: (ep[0] - sx) ** 2 + (ep[1] - sy) ** 2,
+    )[:C.MRM_LOS_MAX_ENEMIES]
+
+    t_start = time.perf_counter()
+    k = 0
+    while k < n:
         angle = 2.0 * math.pi * k / n
         cx    = sx + r * math.cos(angle)
         cy    = sy + r * math.sin(angle)
@@ -70,13 +85,20 @@ def compute_mrm(
             zone_cx, zone_cy, zone_r,
             next_zone_cx, next_zone_cy, next_zone_r,
             is_on_roof, rooftop_goal, prev_dir,
-            angle, world, state,
+            angle, world, state, los_enemies,
         )
 
         if cost < best_cost:
             best_cost = cost
             best_dx   = math.cos(angle)
             best_dy   = math.sin(angle)
+        k += 1
+
+        # Latency guard: if LOS scoring is eating the tick budget, re-score all
+        # candidates without it (cheap) so every candidate is judged the same way.
+        if los_enemies and k < n and (time.perf_counter() - t_start) > time_budget_s:
+            los_enemies = []
+            best_cost, best_dx, best_dy, k = float("inf"), 0.0, 0.0, 0
 
     if best_cost >= C.W_ZONE_OOB * 0.5:
         gx = next_zone_cx - sx
@@ -102,8 +124,11 @@ def _risk(
     angle: float,
     world = None,
     state: str = "",
+    los_enemies: Optional[List[List[float]]] = None,
 ) -> float:
     """Return the total risk score for candidate point (cx, cy)."""
+    if los_enemies is None:
+        los_enemies = enemy_positions
     cost = 0.0
 
     # ---- 1. Wall Awareness: Sample candidate vector at 4m, 8m, 14m ----
@@ -115,11 +140,12 @@ def _risk(
                 cost += 50000.0 / d
 
     # ---- 2. Slicing the Pie (Cover & Line-of-Sight Isolation) ----
-    if world is not None and enemy_positions:
-        # Count how many tracked threats have direct LOS to candidate
+    if world is not None and los_enemies:
+        # Count how many nearby threats have direct LOS to candidate
         enemies_with_los = 0
-        for ep in enemy_positions:
-            if world.has_los_2d(cx, cy, cz + 4.5, ep[0], ep[1], ep[2] + 4.5):
+        for ep in los_enemies:
+            if world.has_los_2d(cx, cy, cz + 4.5, ep[0], ep[1], ep[2] + 4.5,
+                                step=C.MRM_LOS_STEP_M):
                 enemies_with_los += 1
 
         if state == "DISENGAGE_REGEN":
