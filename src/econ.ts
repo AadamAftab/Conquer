@@ -2,7 +2,7 @@ import { draw, type BotAction, type Hello, type Observation, type SelfObs } from
 import type { GameMap } from "./map.ts"
 import type { Navigator } from "./nav.ts"
 import type { Track, World } from "./world.ts"
-import { aimAt, clampPitch, shellLanding } from "./combat.ts"
+import { aimAt, clampPitch, leadAim, shellLanding } from "./combat.ts"
 import { angDiff, type V2, type V3 } from "./geom.ts"
 import { PP } from "./practice.ts"
 
@@ -329,6 +329,13 @@ export class Econ {
         p = [T.pos[0] + T.vel[0] * (tt + age), T.pos[1] + T.vel[1] * (tt + age), tc[2] + T.vel[2] * Math.min(tt, 0.3)]
       }
       lead = aimAt(muz, p)
+    }
+    if (PP.econAim === "ours" && iGun >= 0 && age < 0.11) {
+      // strafe-aware prediction from the tick the shot actually leaves, from where our muzzle will be
+      const G = slots[iGun]!
+      const delay = Math.max(1, Math.ceil(Math.max(0, G.cooldown) / 0.05 - 1e-6)) * 0.05
+      const o: V3 = [muz[0] + me.vel[0] * delay, muz[1] + me.vel[1] * delay, muz[2] + me.vel[2] * delay]
+      lead = leadAim(this.h.m, o, T, speed, delay, 4.5 * tScale, this.h.g)
     }
     const lightNear = iLight >= 0 && d < (slots[iLight]!.stats.range ?? 45) * 1.1
     const L = iLaser >= 0 ? slots[iLaser]! : null
