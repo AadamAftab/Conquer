@@ -25,7 +25,7 @@ export const PP = {
   /** conditional "losing" retreat with a 6 s hide window, then heal in cover */
   ttun: false,
   /** never drop the gun: gun + best special (laser preferred) */
-  keepGun: false,
+  keepGun: true,
   /** strafe flip timing: next flip after strafeMin + rnd * strafeSpan seconds, flip probability */
   strafeMin: 1.0,
   strafeSpan: 1.6,
@@ -54,7 +54,7 @@ export const PP = {
   gunLos: false,
   cubeMemS: 3,
   /** plain linear gun lead (2 iterations, +0.05 s, vertical clamp 6 m) instead of the strafe model */
-  linearLead: true,
+  linearLead: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
