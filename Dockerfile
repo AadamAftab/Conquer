@@ -1,6 +1,12 @@
-# Build from this folder: docker build -t my-bot .
-# The match runs it with no network, a read-only root (writable /tmp), 1 CPU, 512 MB, and the map at /arena.
-FROM python:3.13-slim
-WORKDIR /bot
-COPY . .
-ENTRYPOINT ["python3", "-u", "/bot/bot.py"]
+FROM golang:1.26.1-bookworm@sha256:ab3d6955bbc813a0f3fdf220c1d817dd89c0b3f283777db8ece4a32fe7858edd AS build
+WORKDIR /src
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+COPY go.mod ./
+COPY mech ./mech
+COPY cmd/bot ./cmd/bot
+RUN go build -trimpath -ldflags="-s -w" -o /mechbot ./cmd/bot
+
+FROM scratch
+ENV HOME=/tmp TMPDIR=/tmp GOMAXPROCS=1
+COPY --from=build /mechbot /mechbot
+ENTRYPOINT ["/mechbot"]
