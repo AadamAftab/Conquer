@@ -604,6 +604,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 		if t.Closing > 3 {
 			s -= 15
 		}
+		if tweakRear > 0 && b.pracOn && b.backTo(t, x, y) {
+			s -= tweakRear
+		}
 		if s < bestScore {
 			bestScore, target = s, t
 		}
@@ -1022,6 +1025,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 						(1 + b.Cfg.Cubes.DamagePerCube*float64(min(me.Cubes, b.Cfg.Cubes.StatCap)))
 					if holds(target.Weapons, "mortar") {
 						dmg *= 1 + w.Stats.Cookoff
+					}
+					if tweakRear > 0 && b.pracOn && b.Cfg.Mech.RearMult > 1 && b.backTo(target, x, y) {
+						dmg *= b.Cfg.Mech.RearMult
 					}
 					if dmg*0.8 >= target.HP && math.Abs(angDiff(hy, me.Aim[0])) < tolY*0.9 && math.Abs(hp-me.Aim[1]) < tolP {
 						aim = [2]float64{hy, hp}
@@ -1960,6 +1966,16 @@ func (b *Brain) home(o *Obs) (float64, float64, bool) {
 		}
 	}
 	return b.homeXY[0], b.homeXY[1], b.homeSet
+}
+
+// backTo: the track's torso faces away from (x, y) by a margin, so our hits land on its rear armor.
+func (b *Brain) backTo(t *Track, x, y float64) bool {
+	arc := b.Cfg.Mech.FrontArcDeg
+	if arc <= 0 {
+		arc = 180
+	}
+	toMe := math.Atan2(y-t.Pos[1], x-t.Pos[0])
+	return math.Abs(angDiff(t.Aim[0], toMe)) > arc*math.Pi/360+0.3
 }
 
 // mechSounds: sounds only mechs make (weapons, steps, boosts, jets, reloads).
