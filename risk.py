@@ -141,25 +141,35 @@ def _risk(
 
     # ---- 2. Slicing the Pie (Cover & Line-of-Sight Isolation) ----
     if world is not None and los_enemies:
-        # Count how many nearby threats have direct LOS to candidate
+        # Count how many nearby threats can *see* the candidate. Sight (not
+        # shots) is what matters for cover: trees hide you from eyes but never
+        # stop bullets.
+        sight = getattr(world, "has_sight", world.has_los_2d)
         enemies_with_los = 0
         for ep in los_enemies:
-            if world.has_los_2d(cx, cy, cz + 4.5, ep[0], ep[1], ep[2] + 4.5,
-                                step=C.MRM_LOS_STEP_M):
+            if sight(cx, cy, cz + 4.5, ep[0], ep[1], ep[2] + 4.5,
+                     step=C.MRM_LOS_STEP_M):
                 enemies_with_los += 1
 
-        if state == "DISENGAGE_REGEN":
-            # Reward finding complete cover (0 enemies with LOS triggers regen!)
+        if state in ("DISENGAGE_REGEN", "EVADE"):
+            # Reward finding complete cover (0 enemies with sight of the
+            # candidate lets regen start). Cover beats 1v1s: the practice
+            # house bots share vision, so "seen by nobody" is the only state
+            # the squad cannot simply relay to the rest of its pack.
             if enemies_with_los == 0:
-                cost -= 600.0
+                cost -= 900.0
             else:
-                cost += 400.0 * enemies_with_los
+                cost += 500.0 * enemies_with_los
         elif state in ("AMBUSH_HUNTER", "ENDGAME_SURVIVAL"):
-            # Strongly penalize getting caught in multi-bot crossfire!
-            if enemies_with_los >= 2:
-                cost += 350.0 * (enemies_with_los - 1)
-            elif enemies_with_los == 1:
-                cost -= 250.0  # Reward isolating 1v1 fights!
+            # The squad shares vision, so *being seen at all* is the real cost:
+            # one sighting pulls the whole pack. Movement that stays unseen is
+            # rewarded; movement inside any sight line is taxed per observer.
+            # (Trading cover for a "1v1" is a false economy against a squad
+            # that relays positions, so there is no isolation bonus.)
+            if enemies_with_los == 0:
+                cost -= 140.0
+            else:
+                cost += 250.0 * enemies_with_los
 
     # ---- 3. Enemy proximity penalty (inverse-square) ----
     for ep in enemy_positions:

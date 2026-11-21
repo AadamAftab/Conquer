@@ -41,6 +41,34 @@ class Rooftop:
     approach_y: float = 0.0    # best ground approach point y
 
 @dataclass
+class Tree:
+    """
+    A tree from world.json. Trees block VISION only: trunks stop a sight line
+    outright, crowns fade it (dense crowns block, thin foliage does not). They
+    never stop movement or shots.
+    """
+    x: float
+    y: float
+    z: float          # base height
+    height: float
+    crown_r: float
+    crown_base: float  # height above z where the crown starts
+    trunk_r: float
+
+    def trunk_block(self, px: float, py: float, pz: float) -> bool:
+        if pz < self.z or pz > self.z + self.crown_base:
+            return False
+        return (px - self.x) ** 2 + (py - self.y) ** 2 <= self.trunk_r * self.trunk_r
+
+    def crown_contains(self, px: float, py: float, pz: float) -> bool:
+        """True if (px,py,pz) sits inside this tree's crown volume."""
+        if pz < self.z + self.crown_base or pz > self.z + self.height:
+            return False
+        d2 = (px - self.x) ** 2 + (py - self.y) ** 2
+        return d2 <= self.crown_r * self.crown_r
+
+
+@dataclass
 class Prism:
     """A solid obstacle prism from world.json."""
     kind: str                  # 'building', 'bridge', 'stadium'
@@ -214,6 +242,8 @@ class WorldIndex:
             self._tmin_x = self._tmin_y = 0.0
             self.prisms = []
             self.rooftops = []
+            self.trees = []
+            self._tree_grid = {}
             self.bounds = None
             return
 
@@ -282,9 +312,48 @@ class WorldIndex:
                 approach_y = ay,
             ))
 
+        # --- Trees (vision only) ---
+        # world.json stores them as a flat `data` array with named columns in
+        # `fields`. Parse defensively: column order is taken from `fields`, and
+        # any row that does not line up is skipped rather than raising.
+        self.trees: List[Tree] = []
+        self._tree_grid: dict = {}
+        trees_raw = world.get("trees") or {}
+        fields = trees_raw.get("fields") or []
+        data = trees_raw.get("data") or []
+        if fields and data:
+            idx = {name: i for i, name in enumerate(fields)}
+            need = ("x", "y")
+            if all(k in idx for k in need):
+                ncol = len(fields)
+                for r in range(0, len(data) - ncol + 1, ncol):
+                    row = data[r:r + ncol]
+                    try:
+                        tx = float(row[idx["x"]])
+                        ty = float(row[idx["y"]])
+                        tz = float(row[idx["z"]]) if "z" in idx else 0.0
+                        th = float(row[idx["height"]]) if "height" in idx else 8.0
+                        cr = float(row[idx["crownR"]]) if "crownR" in idx else 3.0
+                        cb = float(row[idx["crownBase"]]) if "crownBase" in idx else max(0.0, th * 0.4)
+                        tr = float(row[idx["trunkR"]]) if "trunkR" in idx else 0.3
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if th <= 0.0 or cr <= 0.0:
+                        continue
+                    tree = Tree(x=tx, y=ty, z=tz, height=th,
+                                crown_r=cr, crown_base=cb, trunk_r=tr)
+                    self.trees.append(tree)
+                    # Spatial grid, same cell size as prisms.
+                    gx = int(math.floor(tx / self.CELL_SIZE))
+                    gy = int(math.floor(ty / self.CELL_SIZE))
+                    cell = (gx, gy)
+                    if cell not in self._tree_grid:
+                        self._tree_grid[cell] = []
+                    self._tree_grid[cell].append(tree)
+
         mf.log(f"[world] loaded {len(self.prisms)} prisms, "
                f"{len(self.rooftops)} viable rooftops "
-               f"({min_roof_h}–{max_roof_h} m)")
+               f"({min_roof_h}–{max_roof_h} m), {len(self.trees)} trees")
 
     # ------------------------------------------------------------------
     # Terrain sampling
@@ -405,6 +474,55 @@ class WorldIndex:
                             in_hole = any(_point_in_polygon(mx, my, h) for h in prism.holes)
                             if not in_hole:
                                 return False
+        return True
+
+    def has_sight(self,
+                  x0: float, y0: float, z0: float,
+                  x1: float, y1: float, z1: float,
+                  step: Optional[float] = None,
+                  canopy_block_t: int = 3) -> bool:
+        """
+        VISION line of sight: like has_los_2d, but trees also count. Trunks
+        stop sight outright; crowns fade it, and a sample inside `canopy_block_t`
+        overlapping crowns counts as blocked (protocol §8: thin foliage does not
+        block, a dense crown does).
+
+        Use this for "can I see/hear it" and for cover scoring. Keep has_los_2d
+        for shots: trees never stop a bullet.
+        """
+        if not self.has_los_2d(x0, y0, z0, x1, y1, z1, step=step):
+            return False
+        if not self.trees:
+            return True
+
+        dist = math.hypot(x1 - x0, y1 - y0)
+        if dist < 0.1:
+            return True
+        steps = max(2, int(math.ceil(dist / (step or C.LOS_STEP_M))))
+        current_cell = None
+        cell_trees: List[Tree] = []
+
+        for s in range(1, steps):
+            t = s / steps
+            mx = x0 + (x1 - x0) * t
+            my = y0 + (y1 - y0) * t
+            mz = z0 + (z1 - z0) * t
+
+            cell = (int(mx // self.CELL_SIZE), int(my // self.CELL_SIZE))
+            if cell != current_cell:
+                current_cell = cell
+                cell_trees = self._tree_grid.get(cell, [])
+            if not cell_trees:
+                continue
+
+            crowns = 0
+            for tree in cell_trees:
+                if tree.trunk_block(mx, my, mz):
+                    return False
+                if tree.crown_contains(mx, my, mz):
+                    crowns += 1
+                    if crowns >= canopy_block_t:
+                        return False
         return True
 
     def is_walkable(self, x: float, y: float, z: float) -> bool:

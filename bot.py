@@ -134,7 +134,7 @@ class Bot:
         # ================================================================
         # Step 1 — Update epistemic tracker from raw observation
         # ================================================================
-        self.tracker.update(obs)
+        self.tracker.update(obs, world=self.world)
 
         # ================================================================
         # Step 2 — Extract commonly used fields

@@ -334,7 +334,8 @@ class LaserController:
 # ---------------------------------------------------------------------------
 
 def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0,
-                  attackers: Optional[Dict[int, float]] = None) -> Optional[dict]:
+                  attackers: Optional[Dict[int, float]] = None,
+                  lock_id: Optional[int] = None) -> Optional[dict]:
     """
     Choose highest-priority target:
       1. T0 enemy mech with direct LOS, ranked by a score mixing distance, HP,
@@ -344,6 +345,11 @@ def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0,
       4. If no enemy mechs & cubes < 10:
          - Nearest NPC drone within 70m with LOS (drops 2 cubes)
          - Nearest crate within 60m with LOS (drops 1 cube + 50% weapon)
+
+    `lock_id` is the target we chose last tick. If it is still a legal, visible
+    mech we keep it unless another mech beats it by TARGET_SWITCH_MARGIN. A
+    torso turn is 0.785 s with no shots, so flapping between two similar
+    targets (and the strafe direction that follows the target) is pure loss.
     """
     me = obs["self"]
     my_x, my_y, my_z = me["pos"]
@@ -359,16 +365,28 @@ def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0,
 
         def score(m):
             tx, ty = m["pos"][0], m["pos"][1]
-            s = _dist2d(my_x, my_y, tx, ty) + 0.05 * m.get("hp", 1400)
+            # hp is omitted entirely when vision.show_enemy_hp is false, and may
+            # be present-but-None: treat both as "unknown", never as a number.
+            hp = m.get("hp")
+            if not isinstance(hp, (int, float)):
+                hp = 1400.0
+            s = _dist2d(my_x, my_y, tx, ty) + C.TARGET_HP_WEIGHT * hp
             if attackers and t_now - attackers.get(m["id"], -1e9) < 2.0:
                 s -= 60.0          # whoever is hurting us right now
             if my_laser and "mortar" in (m.get("weapons") or []):
                 s -= 30.0          # cook-off: +60 % laser damage
             return s
 
+        ranked = sorted(t0_mechs, key=score)
+
+        # --- Stickiness: keep the locked target unless clearly beaten ---
+        if lock_id is not None and C.TARGET_STICKY:
+            current = next((m for m in ranked if m["id"] == lock_id), None)
+            if current is not None and score(current) <= score(ranked[0]) + C.TARGET_SWITCH_MARGIN:
+                return current
+
         # Best score with a clear shot wins. LOS rays are the expensive part,
         # so only the 4 best-scored candidates get one.
-        ranked = sorted(t0_mechs, key=score)
         if world is None:
             return ranked[0]
         for m in ranked[:4]:
@@ -380,7 +398,8 @@ def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0,
     # --- 2. T1 tracker beliefs ---
     t1 = [v for v in tracker_beliefs.values() if v.get("tier") == 1 and v.get("kind") == "mech"]
     if t1:
-        return min(t1, key=lambda b: b.get("hp", 9999))
+        # Same unknown-HP hazard as score(): don't let None compare against None.
+        return min(t1, key=lambda b: b.get("hp") if isinstance(b.get("hp"), (int, float)) else 9999)
 
     # --- 3. Resource farming (only when under stat cap: cubes < 10) ---
     if cubes < 10:
@@ -591,8 +610,20 @@ class CombatController:
                 break
 
         # ---- Select target (including NPC/crate farming) ----
+        # Pass the previous mech target so the choice sticks from tick to tick
+        # (prevents target flapping and the strafe reversal that follows it).
+        lock_id = self.target.get("id") if (self.target and self.target.get("kind") == "mech") else None
         target = select_target(obs, tracker_beliefs, world=world, cubes=cubes,
-                               attackers=self._attackers)
+                               attackers=self._attackers, lock_id=lock_id)
+
+        # ---- Retreating: farming is counter-productive ----
+        # Any damage we deal restarts the server's regen_delay timer, so
+        # shooting a crate or drone while disengaging stops us healing. Skip
+        # resource targets entirely in the retreat/evade states (and never
+        # substitute a crate/drone for a mech that is actually visible).
+        if state in ("DISENGAGE_REGEN", "EVADE") and target is not None \
+                and target.get("kind") in ("crate", "npc"):
+            target = None
         self.target = target
 
         # ---- Active Torso Scanning when no target ----

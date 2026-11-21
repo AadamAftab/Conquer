@@ -115,7 +115,7 @@ class MotionController:
         # ------------------------------------------------------------------
         # RULE 2: DISENGAGE & DUCK BEHIND COVER
         # ------------------------------------------------------------------
-        if state == "DISENGAGE_REGEN":
+        if state in ("DISENGAGE_REGEN", "EVADE"):
             d = R.compute_mrm(
                 pos=pos, enemy_positions=[e["pos"] for e in enemies],
                 zone_cx=zone_cx, zone_cy=zone_cy, zone_r=zone_r,
@@ -124,14 +124,21 @@ class MotionController:
                 world=world, state=state, time_budget_s=self._mrm_budget,
             )
             boost = (energy > 20.0 and grounded) or (urgent and energy > C.DODGE_BOOST_ENERGY)
-            return self._finish(d, boost, False, world, pos, dodge=dodge, mode="disengage")
+            mode = "evade" if state == "EVADE" else "disengage"
+            return self._finish(d, boost, False, world, pos, dodge=dodge, mode=mode)
 
         # ------------------------------------------------------------------
         # RULE 3: COMBAT AGAINST AN ENEMY MECH
         # ------------------------------------------------------------------
+        # Only fight what is in engagement range. Beyond it the brain is in a
+        # non-combat state anyway; this is a belt-and-braces guard so the legs
+        # never path toward a distant mech just because it is visible.
         foe = self._pick_foe(enemies, target, sx, sy)
         if foe is not None:
-            return self._combat_move(obs, foe, enemies, world, t, dodge, urgent, nav_budget_s)
+            foe_d = math.hypot(foe["pos"][0] - sx, foe["pos"][1] - sy)
+            if foe_d <= C.ENGAGE_RANGE:
+                return self._combat_move(obs, foe, enemies, world, t, dodge, urgent, nav_budget_s)
+            foe = None   # out of range: fall through to loot / rotate
 
         # ------------------------------------------------------------------
         # RULE 4: FARMING AN NPC DRONE (it shoots back: strafe it)
@@ -417,6 +424,7 @@ class MotionController:
     # ==================================================================
     def _drop_goal(self, obs, enemies, sx, sy, ncx, ncy, nr):
         me = obs["self"]
+        my_id = me.get("id")
         speed = (me.get("stats", {}) or {}).get("walk_speed", C.WALK_SPEED)
         best = None
         for d in obs.get("drops", []) or []:
@@ -426,14 +434,26 @@ class MotionController:
                 continue
             if math.hypot(dpos[0] - ncx, dpos[1] - ncy) > nr:
                 continue
+            radius = d.get("radius", 8.0)
+            inside = dist <= radius - 1.5
             eta = dist / max(1.0, speed)
             if d.get("lands_in", 99.0) > eta + 5.0:
                 continue
             if any(math.hypot(e["pos"][0] - dpos[0], e["pos"][1] - dpos[1]) < C.DROP_ENEMY_CLEAR_M
                    for e in enemies):
                 continue
+
+            # Capture is solo: two mechs in the ring freeze the clock, and if
+            # the ring empties or the sole holder changes, the clock restarts.
+            # So an enemy holder is worth contesting only when we can reach the
+            # ring before their clock finishes — stepping in freezes them.
+            holder = d.get("holder")
+            if holder is not None and holder != my_id and not inside:
+                progress = float(d.get("progress", 0.0) or 0.0)
+                capture_s = float(d.get("capture_s", 4.0) or 4.0)
+                if progress + eta >= capture_s:
+                    continue   # they win the race; don't feed them a target
             if best is None or dist < best[0]:
-                inside = dist <= d.get("radius", 8.0) - 1.5
                 best = (dist, (dpos[0], dpos[1]), inside)
         if best is None:
             return None

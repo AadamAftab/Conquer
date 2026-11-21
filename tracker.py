@@ -56,6 +56,11 @@ class BeliefEntry:
     # Confidence score [0..1] — used by combat.py to gate shots
     confidence: float = 0.0
     bearing_from_sound: Optional[float] = None   # T3 bearing (radians)
+    # Last muzzle world position seen on a beam/arc by this actor (exact-ish),
+    # and when. Beams are the most accurate off-sight bearing we get: the path
+    # starts at the shooter's muzzle (protocol §6, `beams`).
+    beam_pos: Optional[List[float]] = None
+    last_beam_t: float = -999.0
 
 
 # ---------------------------------------------------------------------------
@@ -82,10 +87,14 @@ class EpistemicTracker:
         self._next_sound_id = 10000   # synthetic id for T3-only tracks
 
     # ------------------------------------------------------------------
-    def update(self, obs: dict) -> None:
+    def update(self, obs: dict, world=None) -> None:
         """
         Main update call. Must be invoked at the start of each act() tick.
         Updates all tiers, applies contradiction rules, prunes stale entries.
+
+        `world` (a WorldIndex) is optional but strongly recommended: without it
+        the Empty-View rule cannot tell "I can see there is nobody" from "a
+        building is in the way", and it demotes fresh tracks it should keep.
         """
         t     = obs["t"]
         me    = obs["self"]
@@ -158,9 +167,12 @@ class EpistemicTracker:
         # --- Step 3: Ingest sound observations (T3) ---
         self._process_sounds(obs, t, my_x, my_y, my_z, seen_ids)
 
+        # --- Step 3b: Ingest beam/arc sightings ---
+        self._process_beams(obs, t)
+
         # --- Step 4: Apply contradiction rules ---
         self._apply_contradictions(obs, t, my_x, my_y, my_z,
-                                   my_aim_yaw, alive_count)
+                                   my_aim_yaw, alive_count, world)
 
         # --- Step 5: Kill event processing ---
         for event in obs.get("events", []):
@@ -214,6 +226,32 @@ class EpistemicTracker:
             # We deliberately stay conservative and only shoot at T0/T1.
 
     # ------------------------------------------------------------------
+    def _process_beams(self, obs: dict, t: float) -> None:
+        """
+        Record exact muzzle positions from beams/arcs (protocol §6).
+
+        `path[0]` starts at the shooter's muzzle, so this is a far better
+        bearing than a ±7° sound. We only annotate an existing track (never
+        invent one) — a beam with no known shooter id is useless for tracking.
+        """
+        for beam in obs.get("beams", []) or []:
+            by = beam.get("by")
+            if by is None:
+                continue
+            path = beam.get("path") or []
+            if not path:
+                continue
+            entry = self.beliefs.get(int(by))
+            if entry is None:
+                continue
+            try:
+                origin = [float(path[0][0]), float(path[0][1]), float(path[0][2])]
+            except (TypeError, ValueError, IndexError):
+                continue
+            entry.beam_pos = origin
+            entry.last_beam_t = t - float(beam.get("age", 0.0) or 0.0)
+
+    # ------------------------------------------------------------------
     def _in_fov(self, my_x: float, my_y: float, my_aim_yaw: float,
                 tx: float, ty: float) -> bool:
         """True if (tx,ty) is inside our forward FOV cone."""
@@ -231,7 +269,8 @@ class EpistemicTracker:
     # ------------------------------------------------------------------
     def _apply_contradictions(self, obs: dict, t: float,
                               my_x: float, my_y: float, my_z: float,
-                              my_aim_yaw: float, alive_count: int) -> None:
+                              my_aim_yaw: float, alive_count: int,
+                              world=None) -> None:
         """
         Apply the two contradiction rules to remove impossible beliefs.
         """
@@ -257,21 +296,30 @@ class EpistemicTracker:
             bx, by = entry.pos[0], entry.pos[1]
             in_view = (self._in_fov(my_x, my_y, my_aim_yaw, bx, by) or
                        self._in_proximity(my_x, my_y, bx, by))
-            if in_view:
-                # We should see it — if no mech is at that position, demote
-                if not any(
-                    math.hypot(px - bx, py - by) < 6.0
-                    for px, py in seen_positions
-                ):
-                    entry.tier = 2
-                    entry.confidence = C.FIRE_CONFIDENCE_T2
-                    entry.uncertainty_radius = max(entry.uncertainty_radius, 15.0)
+            if not in_view:
+                continue
+            # Being inside the FOV wedge is not the same as having a clear view:
+            # buildings and tree crowns block it. Only claim "I see nothing
+            # there" when the sight line is actually open. Without a world we
+            # keep the old conservative behaviour (demote).
+            if world is not None and hasattr(world, "has_sight"):
+                if not world.has_sight(my_x, my_y, my_z + C.MECH_EYE_HEIGHT,
+                                       bx, by, entry.pos[2] + C.MECH_EYE_HEIGHT):
+                    continue   # blocked → we cannot contradict the belief
+            if not any(
+                math.hypot(px - bx, py - by) < 6.0
+                for px, py in seen_positions
+            ):
+                entry.tier = 2
+                entry.confidence = C.FIRE_CONFIDENCE_T2
+                entry.uncertainty_radius = max(entry.uncertainty_radius, 15.0)
 
     # ------------------------------------------------------------------
     def visible_threats(self) -> List[BeliefEntry]:
         """Return T0 + T1 beliefs (high-confidence targets), sorted by HP asc."""
         candidates = [b for b in self.beliefs.values() if b.tier <= 1]
-        return sorted(candidates, key=lambda b: (b.hp or 9999, b.tier))
+        return sorted(candidates,
+                      key=lambda b: (b.hp if isinstance(b.hp, (int, float)) else 9999, b.tier))
 
     def any_visible(self) -> bool:
         """True if any enemy MECH is currently visible (NPC drones excluded)."""
@@ -284,3 +332,17 @@ class EpistemicTracker:
     def recent_mech_threat(self) -> bool:
         """True if any enemy mech is visible or still in recent memory (T0/T1)."""
         return any(b.tier <= 1 and b.kind == "mech" for b in self.beliefs.values())
+
+    def nearest_mech_dist(self, x: float, y: float, max_tier: int = 1) -> Optional[float]:
+        """
+        Horizontal distance to the closest enemy MECH at tier <= max_tier,
+        or None if none is tracked. Used for the engagement-range gates.
+        """
+        best = None
+        for b in self.beliefs.values():
+            if b.kind != "mech" or b.tier > max_tier:
+                continue
+            d = math.hypot(b.pos[0] - x, b.pos[1] - y)
+            if best is None or d < best:
+                best = d
+        return best

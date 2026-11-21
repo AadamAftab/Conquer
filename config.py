@@ -216,6 +216,17 @@ GUN_EXTRA_TOL_DEG: float   = 1.0   # aim slack on top of target size for the gun
 LASER_EXTRA_TOL_DEG: float = 1.5   # aim slack on top of target size for the laser
 REGEN_QUIET_S: float       = 1.5   # in DISENGAGE, hold fire only after this long unhurt
 
+# TARGET SELECTION
+# Keep the current target while it stays legal: a 180 deg torso turn costs
+# 0.785 s with no shots, so alternating between similar targets (and reversing
+# the strafe that follows it) is pure loss. Switch only when a rival scores
+# this much better.
+TARGET_STICKY: bool        = True
+TARGET_SWITCH_MARGIN: float = 35.0
+# HP weight in the target score. Higher favours finishing wounded mechs;
+# too high and a wounded mech across the map outranks the one shooting us.
+TARGET_HP_WEIGHT: float    = 0.15
+
 # Distance thresholds inside which we switch from MRM to direct flee
 PANIC_RANGE: float       = 25.0   # m — enemy too close to MRM: hard flee
 
@@ -237,6 +248,16 @@ ROOF_ARRIVAL_Z: float      = 2.0   # m vertical tolerance
 # AMBUSH / COMBAT
 ENGAGE_RANGE: float        = 220.0 # m — engage if enemy is within this range
 LASER_ENGAGE_RANGE: float  = 270.0 # m — laser has extra range; prefer laser engages
+
+# OPENING & PACK SURVIVAL
+# Placement is the score (16 - place), and practice is one 15-bot squad that
+# shares vision and hunts the weakest. Stay out of fights early: loot, take a
+# drop, rotate. Engage only after this many seconds, when hurt enough to be
+# forced into it, or once combat has already started.
+OPENING_CALM_S: float      = 35.0
+# Above this many mechs alive we still accept an outnumbered fight as a reason
+# to break off; below it the circle is small and hiding is no longer an option.
+LATE_GAME_ALIVE: int       = 6
 DISENGAGE_HP_FRAC: float   = 0.40  # fraction of max HP — below this (with threats), disengage
 REGEN_RESUME_FRAC: float   = 0.75  # fraction of max HP — above this, re-engage
 GUN_MIN_TOL_DEG: float     = 0.8   # minimum aim tolerance for firing the gun (deg)
