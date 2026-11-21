@@ -38,6 +38,8 @@ export const RP = {
   ffaPractice: false,
   /** simulator only: treat every match as a free-for-all from the start */
   ffaForce: false,
+  /** test only: keep the navigator state left by the warmup (the hops of v13 and before) */
+  warmNav: false,
   /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
   ffaCore: "econ" as "ninja" | "econ",
 }

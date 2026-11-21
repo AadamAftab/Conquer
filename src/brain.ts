@@ -154,7 +154,8 @@ export class Brain {
       log("practice warmup failed", e)
     }
     // the fake match ran up to t = 3.9 s on our navigator: forget its stuck timers too
-    this.nav.resetAll()
+    if (RP.warmNav) this.nav.reset()
+    else this.nav.resetAll()
     if (n < 0) log(n)
   }
 
