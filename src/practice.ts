@@ -64,7 +64,7 @@ export const PP = {
   /** econ gun lead: "ttun" (linear with track age) or "ours" (strafe model from the firing tick) */
   econAim: "ttun" as "ttun" | "ours",
   /** econ: back off from drones shooting us when badly hurt */
-  econDroneBack: false,
+  econDroneBack: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
