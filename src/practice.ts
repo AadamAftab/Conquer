@@ -18,7 +18,7 @@ export const PP = {
   manyDps: 110,
   finishFrac: 0.3,
   strafe: 0.85,
-  drops: true,
+  drops: false,
   killSites: false,
   /** economy loop: cube/weapon detours even mid-fight, wider farming, opportunistic farm shots */
   econ: false,
@@ -44,9 +44,15 @@ export const PP = {
   /** ignore weapon pickups more than 2 m above the ground */
   groundOnly: false,
   /** cap speed at 4.6 m/s (silent steps) when calm */
-  quiet: true,
+  quiet: false,
   /** go for supply drops from roam when calm (in addition to / instead of the priority mode) */
-  dropRoam: false,
+  dropRoam: true,
+  /** v11 fidelity switches (see the diff with the 4.75 reference): */
+  duelPick: false,
+  laserLightBlock: false,
+  aimComp: false,
+  gunLos: false,
+  cubeMemS: 3,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -80,6 +86,11 @@ export class Practice {
   climbUntil = -1
   scanYaw = 0
   hideUntil = -1
+  lootBoosting = false
+  stuckAcc = 0
+  detourUntil = -1
+  detourDir: V2 = [1, 0]
+  dodgeSide = new Map<number, number>()
 
   constructor(h: Host) {
     this.h = h
@@ -141,7 +152,7 @@ export class Practice {
       if (d > 300) continue
       const es = 1 + this.h.perCube * e.cubes
       const late = performance.now() - T0 > 15 && d > 60
-      const vis = late ? true : m.los(eye[0], eye[1], eye[2], e.pos[0], e.pos[1], e.pos[2] + 8 * es)
+      const vis = late ? false : m.los(eye[0], eye[1], eye[2], e.pos[0], e.pos[1], e.pos[2] + 8 * es)
       const shoot = late ? vis : m.los(muz[0], muz[1], muz[2], e.pos[0], e.pos[1], e.pos[2] + centerOffset(e, this.h.perCube)) || vis
       seen.push({ e, d, vis, shoot })
     }
@@ -191,7 +202,7 @@ export class Practice {
     const timeLeft = t < zo.shrink_start ? zo.shrink_start - t : Math.max(0, zo.shrink_end - t)
     const dCur = Math.hypot(x - cur.c[0], y - cur.c[1])
     const urgent = !me.in_zone || dCur > cur.r - 8
-    const mustGo = urgent || need / walk + 12 > timeLeft
+    const mustGo = urgent || (need > 0 && need / walk + 12 > timeLeft)
     const safe = (px: number, py: number) => Math.hypot(px - nc[0], py - nc[1]) <= nr - margin / 2 || (!mustGo && Math.hypot(px - cur.c[0], py - cur.c[1]) <= cur.r - 25)
 
     // ---------- goals ----------
@@ -228,6 +239,7 @@ export class Practice {
     let jump = false
     let goalDist = 0
     const go = (gx: number, gy: number) => {
+      if (mustGo && mode !== "zone" && Math.hypot(gx - nc[0], gy - nc[1]) > nr) (gx = nc[0]), (gy = nc[1])
       goalDist = Math.hypot(gx - x, gy - y)
       const spent = performance.now() - T0
       const r = nav.steer(x, y, gx, gy, t, spent > 20 ? 300 : spent > 10 ? 1500 : 5000)
@@ -244,7 +256,13 @@ export class Practice {
         break
       }
       case "cover": {
-        const c = this.coverPoint(x, y, z, t, threats, mustGo, nc, nr, cur)
+        let cth = threats
+        if (!cth.length) cth = seen.slice()
+        if (hiddenBearing !== null) {
+          const ghost: Track = { ...(seen.length ? seen[0].e : ({ cubes: 0, weapons: [], hist: [] } as unknown as Track)), id: -7, pos: [x + Math.cos(hiddenBearing) * 120, y + Math.sin(hiddenBearing) * 120, z] }
+          cth = [...cth, { e: ghost, d: 120, vis: true, shoot: true }]
+        }
+        const c = this.coverPoint(x, y, z, t, cth, mustGo, nc, nr, cur)
         if (c && (c.vis === 0 || !shootable)) {
           mv = go(c.p[0], c.p[1])
           if (PP.ttun && needHeal && !losing) {
@@ -271,17 +289,24 @@ export class Practice {
       }
       case "cube":
         mv = go(cube!.pos[0], cube!.pos[1])
+        if (cube!.d > 30 && !seen.some((s) => s.vis && s.d < 80)) {
+          if (me.energy > 60) this.lootBoosting = true
+          if (this.lootBoosting && me.energy > 22) boost = true
+        }
         break
       case "loot":
         mv = go(pick!.pos[0], pick!.pos[1])
-        if (pick!.d > 30 && nThreat === 0 && me.energy > 60) boost = true
+        if (pick!.d > 30 && !seen.some((s) => s.vis && s.d < 80)) {
+          if (me.energy > 60) this.lootBoosting = true
+          if (this.lootBoosting && me.energy > 22) boost = true
+        }
         if (pick!.d < 14 && pick!.pos[2] - z > 1.5 && me.energy > 20) this.climbUntil = Math.max(this.climbUntil, t + 0.6)
         break
       case "fight": {
         mv = this.fightMove(x, y, T!, hasLaser, hasLight, finishing, false, mustGo, nc, nr, t)
         // mid-duel pickups when it is safe enough
         const near = threats.filter((s) => s.d < 90).length
-        if (hpFrac >= 0.42 && near <= 1) {
+        if (PP.duelPick && hpFrac >= 0.42 && near <= 1) {
           const item = this.duelItem(slots, x, y, z, T!.e, safe)
           if (item) mv = this.steerLocal(x, y, [item[0] - x, item[1] - y])
         }
@@ -297,14 +322,33 @@ export class Practice {
       }
     }
     if (mode !== "cover") this.state = mode
+    if (me.energy <= 22 || (mode !== "loot" && mode !== "cube")) this.lootBoosting = false
     // dodges
-    const dodge = this.dodge(obs, x, y, seen)
-    if ((dodge[0] || dodge[1]) && me.energy > PP.dodgeBoost && Math.hypot(dodge[0], dodge[1]) > 0.3) boost = true
-    if (dodge[0] || dodge[1]) {
-      mv = [mv[0] + dodge[0], mv[1] + dodge[1]]
+    const dg = this.dodge2(obs, x, y, seen, hasLight && me.energy > 6, urgent)
+    if (dg.laser) {
+      mv = [dg.v[0] * 0.9 + mv[0] * 0.1, dg.v[1] * 0.9 + mv[1] * 0.1]
+      if (me.energy > 30 && me.grounded) boost = true
+    } else if (dg.v[0] || dg.v[1]) {
+      mv = [mv[0] + dg.v[0], mv[1] + dg.v[1]]
       const l = Math.hypot(mv[0], mv[1])
       if (l > 1) mv = [mv[0] / l, mv[1] / l]
     }
+    if (dg.mortarBoost && me.energy > 20) boost = true
+    // stuck detector in every mode: wanting to move but barely moving on the ground
+    const spd = Math.hypot(me.vel[0], me.vel[1])
+    if (Math.hypot(mv[0], mv[1]) > 0.5 && spd < 2.5 && me.grounded) this.stuckAcc += 0.1
+    else this.stuckAcc = Math.max(0, this.stuckAcc - 0.1)
+    if (this.stuckAcc > 0.6 && t > this.climbUntil && t > this.detourUntil) {
+      this.stuckAcc = 0
+      const ahead = m.surfAt(x + mv[0] * 4, y + mv[1] * 4) - z
+      if (ahead < 40 && me.energy > 35) this.climbUntil = t + 2.5
+      else {
+        const a = this.h.rnd() * Math.PI * 2
+        this.detourDir = [Math.cos(a), Math.sin(a)]
+        this.detourUntil = t + 1.5
+      }
+    }
+    if (t < this.detourUntil) mv = this.detourDir
     // watchdog: not making progress toward a far goal
     if (this.tick - this.wdTick >= 25) {
       const moved = Math.hypot(x - this.wdPos[0], y - this.wdPos[1])
@@ -317,8 +361,8 @@ export class Practice {
       this.wdTick = this.tick
     }
     if (t < this.climbUntil) {
-      jump = true
-      boost = true
+      jump = me.grounded
+      boost = me.grounded || me.energy > 5
     }
     // quiet when calm
     if (PP.quiet && nThreat === 0 && (mode === "roam" || mode === "cube" || mode === "cover")) {
@@ -331,9 +375,10 @@ export class Practice {
     // ---------- firing (independent of mode) ----------
     const fire: [boolean, boolean] = [false, false]
     let aimYP: [number, number] | null = null
-    if (!shootable && !farm && PP.econ && hpFrac > 0.4 && t - w.lastHurtT > 1.5) farm = this.farmInSight(x, y, z, t)
+    if (!shootable && !farm) farm = this.farmTarget(x, y, z, t, hpFrac, safe)
     const tgt: Track | null = shootable ? T!.e : farm
-    const turnToHit = hiddenBearing !== null && !(shootable && dT < 45)
+    const laserCharging = iLaser >= 0 && (slots[iLaser]!.charge ?? 0) > 0
+    const turnToHit = hiddenBearing !== null && !(shootable && dT < 45) && !laserCharging
     if (tgt && !turnToHit) {
       const r = this.fireControl(me, muz, tgt, iGun, iLaser, iLight, seen)
       aimYP = r.aim
@@ -414,6 +459,7 @@ export class Practice {
   private nearestCube(x: number, y: number, z: number, safe: (x: number, y: number) => boolean, maxD: number): { pos: V3; d: number } | null {
     let best: { pos: V3; d: number } | null = null
     for (const c of this.h.w.cubes.values()) {
+      if (this.h.w.t - c.seenT > PP.cubeMemS) continue
       if (Math.abs(c.pos[2] - z) > 4) continue
       const d = Math.hypot(c.pos[0] - x, c.pos[1] - y)
       if (d > maxD || !safe(c.pos[0], c.pos[1])) continue
@@ -516,6 +562,93 @@ export class Practice {
     }
     if (Math.hypot(nc[0] - x, nc[1] - y) > Math.max(0.55 * nr, 15)) return { p: [nc[0], nc[1]] }
     return null
+  }
+
+  /** Farm target when no mech can be shot (any mode): crates within 150 m, drones within 140 m when healthy. */
+  private farmTarget(x: number, y: number, z: number, t: number, hpFrac: number, safe: (x: number, y: number) => boolean): Track | null {
+    const w = this.h.w, m = this.h.m
+    const c4: { tr: Track; sc: number }[] = []
+    for (const c of w.crates.values()) {
+      const d = Math.hypot(c.pos[0] - x, c.pos[1] - y)
+      if (d < 150 && c.pos[2] < z + 6)
+        c4.push({ tr: { id: c.id, kind: "npc", pos: c.pos, vel: [0, 0, 0], aim: [0, 0], hp: c.hp, maxHp: 300, cubes: 0, weapons: [], charging: false, seenT: t, firstT: 0, hitUsT: -99, hitByUsT: -99, laserT: -99, hist: [], hurtByOtherT: -99 }, sc: d })
+    }
+    if (hpFrac > 0.55)
+      for (const n of w.liveNpcs()) {
+        const d = Math.hypot(n.pos[0] - x, n.pos[1] - y)
+        if (d < 140) c4.push({ tr: n, sc: d + 30 })
+      }
+    c4.sort((a, b) => a.sc - b.sc)
+    for (const c of c4.slice(0, 4)) {
+      const p = c.tr.pos
+      if (!safe(p[0], p[1])) continue
+      if (m.los(x, y, z + 7, p[0], p[1], p[2] + (c.tr.id >= 1000 ? 1.2 : 1.75))) return c.tr
+    }
+    return null
+  }
+
+  /** Reference dodge rules: charged lasers aimed at us (fixed side, wall check), bullets, mortar landings. */
+  private dodge2(obs: Observation, x: number, y: number, seen: Seen[], zapper: boolean, urgent: boolean): { v: V2; laser: boolean; mortarBoost: boolean } {
+    const m = this.h.m, rq = this.h.nav.rq
+    let vx = 0, vy = 0, laser = false, mortarBoost = false
+    for (const s of seen) {
+      const e = s.e
+      if (!s.vis || !e.charging || s.d < 5 || s.d > 290) continue
+      if (zapper && s.d < 40) continue
+      const ax = Math.cos(e.aim[0]), ay = Math.sin(e.aim[0])
+      const rx = x - e.pos[0], ry = y - e.pos[1]
+      const along = rx * ax + ry * ay
+      const cross = rx * ay - ry * ax
+      if (along <= 0 || Math.abs(cross) > 7 + 0.03 * along) continue
+      let side = this.dodgeSide.get(e.id) ?? 0
+      if (!side) side = cross >= 0 ? 1 : -1
+      // perpendicular to its aim, away from the beam line
+      let dx = ay * side, dy = -ax * side
+      if (!m.walkLine(x, y, x + dx * 4, y + dy * 4, rq)) {
+        side = -side
+        dx = -dx
+        dy = -dy
+        if (!m.walkLine(x, y, x + dx * 4, y + dy * 4, rq)) continue
+      }
+      this.dodgeSide.set(e.id, side)
+      vx += dx
+      vy += dy
+      laser = true
+    }
+    const g = this.h.hello.config.weapons.mortar.gravity ?? 22
+    for (const p of obs.projectiles) {
+      if (p.kind === "mortar") {
+        const L = shellLanding(m, p.pos, p.vel, g)
+        if (L && L.t < 3.5) {
+          const d = Math.hypot(L.x - x, L.y - y)
+          if (d < 13) {
+            vx += ((x - L.x) / Math.max(1, d)) * 2
+            vy += ((y - L.y) / Math.max(1, d)) * 2
+            if (L.t < 1.2 && d < 9) mortarBoost = true
+          }
+        }
+        continue
+      }
+      const rx = x - p.pos[0], ry = y - p.pos[1]
+      const vv = p.vel[0] * p.vel[0] + p.vel[1] * p.vel[1]
+      if (vv < 1) continue
+      const tc = (rx * p.vel[0] + ry * p.vel[1]) / vv
+      if (tc < 0.02 || tc > 0.45) continue
+      const cx = p.pos[0] + p.vel[0] * tc - x, cy = p.pos[1] + p.vel[1] * tc - y
+      const cd = Math.hypot(cx, cy)
+      if (cd < 3.8) {
+        const l = Math.max(0.3, cd)
+        vx += (-cx / l) * 0.5
+        vy += (-cy / l) * 0.5
+      }
+    }
+    if (laser) {
+      const l = Math.hypot(vx, vy) || 1
+      vx /= l
+      vy /= l
+    }
+    if (urgent) (vx *= 0.5), (vy *= 0.5)
+    return { v: [vx, vy], laser, mortarBoost }
   }
 
   /** Nearest crate (120 m) or drone (110 m) in line of fire, to shoot while doing something else. */
@@ -695,7 +828,8 @@ export class Practice {
     const fire: [boolean, boolean] = [false, false]
     let reload = false
     const at = (delay: number): V3 => [muz0[0] + me.vel[0] * delay, muz0[1] + me.vel[1] * delay, muz0[2] + me.vel[2] * delay]
-    const errAfter = (a: Aim, delay: number): [number, number] => {
+    const errAfter = (a: Aim, delay0: number): [number, number] => {
+      const delay = PP.aimComp ? delay0 : 0
       const ey = Math.max(0, Math.abs(angDiff(a.yaw, me.aim[0])) - turn * delay)
       const ep = Math.max(0, Math.abs(a.pitch - me.aim[1]) - ptch * delay)
       return [ey, ep]
@@ -712,7 +846,7 @@ export class Practice {
       const p = predict2(m, tr, 0.1, g).p
       laserAim = aimAt(o, [p[0], p[1], p[2] + off])
       const d = laserAim.dist
-      const lightNear = seen.some((s) => s.e.weapons.includes("lightning") && s.d < 1.1 * (this.h.hello.config.weapons.lightning.range ?? 45))
+      const lightNear = PP.laserLightBlock && seen.some((s) => s.e.weapons.includes("lightning") && s.d < 1.1 * (this.h.hello.config.weapons.lightning.range ?? 45))
       if (charge > 0) {
         const [ey, ep] = errAfter(laserAim, TICK)
         const ok = ey <= Math.atan2(1.6 * rad, d) + 0.012 && ep <= 1.5 * (Math.atan2(3, d) + 0.004)
@@ -734,7 +868,7 @@ export class Practice {
       const [ey, ep] = errAfter(gunAim, delay)
       const ammo = G.ammo ?? 1
       const ok = ey <= Math.atan2(1.6 * rad, d) + 0.012 && ep <= Math.atan2(3, d) + 0.004
-      const clear = m.los(o[0], o[1], o[2], gunAim.pt[0], gunAim.pt[1], gunAim.pt[2])
+      const clear = !PP.gunLos || m.los(o[0], o[1], o[2], gunAim.pt[0], gunAim.pt[1], gunAim.pt[2])
       if (delay <= SPAN + 1e-6 && !(G.reload ?? 0) && ammo > 0 && d < (G.stats.range ?? 230) - 3 && ok && clear) fire[iGun] = true
       if (ammo === 0 && !(G.reload ?? 0)) reload = true
     }
