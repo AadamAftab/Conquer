@@ -122,7 +122,7 @@ export class Econ {
       const age = t - e.seenT
       if (age > 4) continue
       const hitT = PP.turnToHit ? Math.max(e.hitUsT, w.hitBy.get(e.id) ?? -99) : e.hitUsT
-      let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - hitT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      let sc = dTo(e.pos) + (e.hp / 1400) * PP.econTgtHpW + age * 30 - (t - hitT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
       if (PP.econTgtLaser && !this.ffa && e.weapons.includes("laser")) sc += PP.econTgtLaser
       if (this.ffa && PP.ffaFocus) sc -= (t - e.hurtByOtherT < 3 ? 40 : 0) + (e.hp / Math.max(1, e.maxHp) < 0.4 ? 30 : 0)
       if (ffaPick) {

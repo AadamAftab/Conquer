@@ -99,7 +99,9 @@ export const PP = {
   econCrateBonus: 0,
   econCrateR: 150,
   /** econ: target score penalty for laser carriers (positive = prefer others) */
-  econTgtLaser: -200,
+  econTgtLaser: 0,
+  /** econ: weight of the target's hp in the target score (TTUN 90 per full health) */
+  econTgtHpW: 90,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
