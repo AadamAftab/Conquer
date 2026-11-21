@@ -25,7 +25,7 @@ export const PP = {
   /** conditional "losing" retreat with a 6 s hide window, then heal in cover */
   ttun: false,
   /** never drop the gun: gun + best special (laser preferred) */
-  keepGun: true,
+  keepGun: false,
   /** strafe flip timing: next flip after strafeMin + rnd * strafeSpan seconds, flip probability */
   strafeMin: 1.0,
   strafeSpan: 1.6,
