@@ -400,7 +400,9 @@ impl Brain {
         };
         let mut laser_final = false;
         let mut early = false;
-        if lz_on && p.lz_early > 0.0 && laser_charging && laser_in {
+        // lz_early 2: early release only once free-for-all play is detected
+        let early_on = p.lz_early > 0.0 && (p.lz_early < 1.5 || !self.squad_mode());
+        if lz_on && early_on && laser_charging && laser_in {
             if let Some((_, w)) = laser_w {
                 let full = w.stats.charge.max(0.05);
                 let fr = w.stats.min_frac + (1.0 - w.stats.min_frac) * (w.charge / full).clamp(0.0, 1.0);
@@ -481,7 +483,7 @@ impl Brain {
                                 0.0
                             };
                             let lethal = avail > 0.0 && tg.hp > 0.0 && part(avail) >= tg.hp * 1.05;
-                            let planned = p.lz_fc_part > 0.0 && p.lz_early > 0.0 && c1 && part(t1) >= w.stats.damage * p.lz_early_frac;
+                            let planned = p.lz_fc_part > 0.0 && early_on && c1 && part(t1) >= w.stats.damage * p.lz_early_frac;
                             go = lethal || planned;
                         }
                     }
