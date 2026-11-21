@@ -9,7 +9,7 @@ import { angDiff, clamp, type V2, type V3 } from "./geom.ts"
 const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate", "laser_charge", "gun_damage", "capacitor", "reactor", "gyros", "lightning_range", "gun_mag", "sensors", "gun_velocity", "servos", "jets", "lightning_chain", "laser_pierce"]
 /** Tunables of the practice core (BOTP env var overrides them in local tests). */
 export const PP = {
-  laserRange: 145,
+  laserRange: 110,
   gunRange: 85,
   lightRange: 28,
   retreatHp: 0.38,
