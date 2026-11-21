@@ -80,6 +80,17 @@ const (
 	// then ranked by the order the zone kills them. It holds only in matches confirmed as practice (squad mode on
 	// after 60 s; in free-for-all a death we did not cause always ends squad mode before about 37 s).
 	tweakFinalHold = false
+	// tweakLeadK: squad mode only, gun lead on mechs. A gun shot leaves on the first tick after the decision when
+	// the cooldown is at most one tick (else on the second) and covers its first 3 m at once, so the bullet reaches
+	// a target d m away (d-3)/speed s after leaving (original: always 0.075 s more). Fighting house bots
+	// strafe and turn back, so they cover only part of v*T: the predicted travel is scaled by this factor
+	// (0 = original lead; in 123 recorded matches 0.8 best centres bullets on them 0.3-0.6 s ahead).
+	tweakLeadK = 0.0
+	// tweakLaserSlew: squad mode only. The torso turns before the beam leaves on the first tick after the release,
+	// so the release and lethal checks allow one tick of turn; the beam leads its target by that tick
+	// (original: 0.125 s); while charging, the aim stays on the gun lead (original: the laser line from 45 % charge
+	// on), and gun shots whose bullet would follow the laser line off the gun lead are held.
+	tweakLaserSlew = false
 )
 
 // pracSureT: squad mode still on at this time (s) confirms a practice match (see tweakFFAUntil).
