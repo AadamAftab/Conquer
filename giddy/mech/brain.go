@@ -327,7 +327,7 @@ func (b *Brain) observe(o *Obs) {
 	if b.otherDead >= 5 {
 		b.notPractice = true
 	}
-	if on := b.base.Practice && !b.notPractice && now > tweakSquadT; on != b.pracOn {
+	if on := b.base.Practice && !b.notPractice && now > tw.squadT; on != b.pracOn {
 		b.pracOn = on
 		b.P = b.base
 		if on {
@@ -643,10 +643,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 				near++
 			}
 		}
-		losing := (near >= 2 && hpFrac < 0.55*tweakLoseK) || (near >= 3 && hpFrac < math.Min(0.95, 0.8*tweakLoseK))
+		losing := (near >= 2 && hpFrac < 0.55*tw.loseK) || (near >= 3 && hpFrac < math.Min(0.95, 0.8*tw.loseK))
 		if target != nil {
 			tf := target.HP / math.Max(1, target.MaxHP)
-			if hpFrac < 0.35*tweakLoseK && tf > hpFrac+0.1 {
+			if hpFrac < 0.35*tw.loseK && tf > hpFrac+0.1 {
 				losing = true
 			}
 			if tf < 0.25 && hpFrac > 0.2 && near <= 2 {
@@ -1117,7 +1117,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 		break
 	}
 
-	if tweakHopT > 0 && now < tweakHopT && (mx != 0 || my != 0) {
+	if tw.hopT > 0 && now < tw.hopT && (mx != 0 || my != 0) {
 		mx, my = mx*0.5-my*0.85, my*0.5+mx*0.85
 		act.Jump = true
 		boost = true
@@ -2063,6 +2063,7 @@ func squadParams(p Params) Params {
 	p.Finish = 14
 	p.Pursue = 1.01
 
+	p.Finish, p.FinishHP, p.FinishRush, p.Pursue, p.Stick = tw.finish, tw.finishHP, tw.finishRush, tw.pursue, tw.stick
 	return p
 }
 
