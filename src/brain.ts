@@ -648,7 +648,7 @@ export class Brain {
         if (yaw !== null) {
           aim = { ...direct, yaw }
           const ey = Math.abs(angDiff(yaw, me.aim[0])) - turn * LAT
-          if (L.cooldown <= 0 && ey < half * 0.55 && los) fire[iLight] = true
+          if (L.cooldown <= 0.1 && ey < half * 0.55 && los) fire[iLight] = true
         }
       }
     }
@@ -663,7 +663,7 @@ export class Brain {
       const p = hitProb(missDist(me, lead, LAT), Math.hypot(lead.sigma, spread), radius + 0.3)
       const need = tr.kind === "npc" ? 0.2 : RP.gunNeed
       const gunLos = m.los(muz[0], muz[1], muz[2], lead.pt[0], lead.pt[1], lead.pt[2])
-      if (gunOk && allowed && G.cooldown <= 0 && ammo > 0 && !(G.reload ?? 0) && okRange && laserOk && gunLos && p > need) fire[iGun] = true
+      if (gunOk && allowed && G.cooldown <= 0.1 && ammo > 0 && !(G.reload ?? 0) && okRange && laserOk && gunLos && p > need) fire[iGun] = true
       if (ammo === 0 && !(G.reload ?? 0)) reload = true
       if (!gunOk && ammo < (G.stats.mag ?? 12) * 0.5 && !(G.reload ?? 0)) reload = true
     }
