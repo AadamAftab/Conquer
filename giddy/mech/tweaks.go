@@ -28,7 +28,7 @@ const (
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
 	tweakStick = 120.0
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
-	tweakHear = false
+	tweakHear = true
 )
 
 type tweakSet struct {
