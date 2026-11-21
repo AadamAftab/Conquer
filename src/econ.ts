@@ -37,6 +37,7 @@ export class Econ {
   spin = 0
   /** free-for-all engagement rules on (set by the brain) */
   ffa = false
+  private visited = new Set<string>()
 
   constructor(h: Host) {
     this.h = h
@@ -125,6 +126,14 @@ export class Econ {
       const hitT = PP.turnToHit ? Math.max(e.hitUsT, w.hitBy.get(e.id) ?? -99) : e.hitUsT
       let sc = dTo(e.pos) + (e.hp / 1400) * PP.econTgtHpW + age * 30 - (t - hitT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
       if (PP.econTgtLaser && !this.ffa && e.weapons.includes("laser")) sc += PP.econTgtLaser
+      if (PP.econEngage && !this.ffa) {
+        const d = dTo(e.pos)
+        const toMe = Math.atan2(y - e.pos[1], x - e.pos[0])
+        const aimed = Math.abs(angDiff(e.aim[0], toMe)) < 0.22
+        const closing = e.vel[0] * Math.cos(toMe) + e.vel[1] * Math.sin(toMe) > 3
+        const lateG = obs.zone.next_radius <= 70 || obs.alive <= 3
+        if (!(d < 60 || t - e.hitUsT < 6 || lateG || (closing && d < 180) || (e.hp < 0.4 * e.maxHp && d < 160) || (aimed && d < 190) || e.id === this.targetId)) continue
+      }
       if (this.ffa && PP.ffaFocus) sc -= (t - e.hurtByOtherT < 3 ? 40 : 0) + (e.hp / Math.max(1, e.maxHp) < 0.4 ? 30 : 0)
       if (ffaPick) {
         // free-for-all: leave alone whoever is not fighting us, not weak, not busy and not close
@@ -309,6 +318,10 @@ export class Econ {
         } else {
           const k = dNext > 1e-3 ? Math.min(0.6 * nr, Math.max(20, dNext - 30)) / dNext : 0
           goal = [nc[0] + (x - nc[0]) * k, nc[1] + (y - nc[1]) * k]
+          if (PP.econExplore && !this.ffa && hpFrac > 0.7 && me.cubes < 10) {
+            const ex = this.exploreGoal(x, y, nc, nr, cur)
+            if (ex) (goal = ex), (mode = "explore")
+          }
         }
         // shoot drones and crates while looting or roaming
         if (hpFrac > 0.4 && t - this.mechHitT > 1.5 && !lurk) {
@@ -531,6 +544,26 @@ export class Econ {
         if (seesMode ? m.sees(eye[0], eye[1], eye[2], px, py, m.groundAt(px, py) + 6) : m.los(eye[0], eye[1], eye[2], px, py, m.groundAt(px, py) + 6)) continue
         const sc = r - 0.3 * (Math.hypot(px - eye[0], py - eye[1]) - d0)
         if (sc < bs) (bs = sc), (best = [px, py])
+      }
+    return best
+  }
+
+  /** Nearest 100 m grid point not visited yet, inside the next circle and the current zone. */
+  private exploreGoal(x: number, y: number, nc: V2, nr: number, cur: { c: V2; r: number }): V2 | null {
+    const G = 100
+    this.visited.add(`${Math.round(x / G)},${Math.round(y / G)}`)
+    let best: V2 | null = null, bd = Infinity
+    const m = this.h.m, rq = this.h.nav.rq
+    for (let i = -6; i <= 6; i++)
+      for (let j = -4; j <= 4; j++) {
+        const gi = Math.round(x / G) + i, gj = Math.round(y / G) + j
+        if (this.visited.has(`${gi},${gj}`)) continue
+        const px = gi * G, py = gj * G
+        if (Math.hypot(px - nc[0], py - nc[1]) > nr || Math.hypot(px - cur.c[0], py - cur.c[1]) > cur.r - 20) continue
+        const n = m.snap(px, py, rq, -1, 25)
+        if (n < 0) continue
+        const d = Math.hypot(px - x, py - y)
+        if (d < bd) (bd = d), (best = [m.nodeX(n), m.nodeY(n)])
       }
     return best
   }
