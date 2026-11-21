@@ -106,6 +106,8 @@ export const PP = {
   econFinish: 0.2,
   /** practice: from this time on, stay out of sight and only answer attackers / close mechs (0 = off) */
   lateEvadeT: 0,
+  /** econ: upgrade order override (empty = survival-first TTUN order) */
+  econUpg: [] as string[],
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */

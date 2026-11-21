@@ -44,8 +44,9 @@ export class Econ {
 
   pickUpgrade(obs: Observation): number {
     let best = 0, bestR = Infinity
+    const order = PP.econUpg.length ? PP.econUpg : UPG
     obs.offer!.choices.forEach((c, i) => {
-      let r = UPG.indexOf(c.id)
+      let r = order.indexOf(c.id)
       if (r < 0) r = 50
       if (r < bestR) (bestR = r), (best = i)
     })
