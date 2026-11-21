@@ -23,9 +23,9 @@ export const PP = {
   /** economy loop: cube/weapon detours even mid-fight, wider farming, opportunistic farm shots */
   econ: false,
   /** conditional "losing" retreat with a 6 s hide window, then heal in cover */
-  ttun: true,
+  ttun: false,
   /** never drop the gun: gun + best special (laser preferred) */
-  keepGun: false,
+  keepGun: true,
   /** strafe flip timing: next flip after strafeMin + rnd * strafeSpan seconds, flip probability */
   strafeMin: 1.0,
   strafeSpan: 1.6,
