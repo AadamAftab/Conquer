@@ -22,13 +22,13 @@ const (
 	// tweakFinishHP: foe HP fraction under which we close in (Params.FinishHP, 0 = original 0.38).
 	tweakFinishHP = 0.0
 	// tweakFinishRush: boost while closing in on a weak foe more than 2*Finish away with energy > 30 (Params.FinishRush, false = original).
-	tweakFinishRush = false
+	tweakFinishRush = true
 	// tweakPursue: chase an engaged foe out of line of sight when its HP fraction is under this (Params.Pursue, 1.01 = original: always).
 	tweakPursue = 1.01
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
 	tweakStick = 120.0
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
-	tweakHear = false
+	tweakHear = true
 	// tweakNpcGoneHP: a drone that vanishes from the observation below this HP fraction is dead and forgotten (0 = original: chased and shot for up to 12 s).
 	tweakNpcGoneHP = 0.0
 	// tweakCubeLevel: in-fight cube detours skip cubes on roofs or decks above our level, which cannot be picked up (false = original).
@@ -39,7 +39,7 @@ const (
 	tweakNpcTie = false
 	// tweakRear: squad mode only, target score bonus for a foe showing us its back (rear armor takes rear_mult damage),
 	// and the rear multiplier counted in the lethal laser release (0 = original).
-	tweakRear = 0.0
+	tweakRear = 50.0
 	// tweakFFAUntil: a death we did not cause switches to free-for-all play only if first seen before this time (s).
 	// In 77 recorded free-for-all matches the first such death always came before 37 s, for every mech, so those
 	// matches play exactly as before; in practice a late zone or drone death no longer drops the squad settings.
