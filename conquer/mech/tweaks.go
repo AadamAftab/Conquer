@@ -6,15 +6,15 @@ const (
 	// It acts before the bot can tell practice from free-for-all, so it changes free-for-all too.
 	tweakHopT = 0.0
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
-	tweakLoseK = 0.3
+	tweakLoseK = 1.0
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
 	tweakSquadT = 20.0
 	// tweakDropV: squad mode only, weight of uncontested supply drops in the calm loot choice (0 = never, as conquer; 1 = 3 cubes + missing HP).
-	tweakDropV = 0.0
+	tweakDropV = 1.0
 	// tweakFightDropR: squad mode only, radius (m) within which a landed, uncontested supply drop is captured mid-fight (0 = never).
-	tweakFightDropR = 0.0
+	tweakFightDropR = 60.0
 	// tweakNano: squad mode only, repair nanites right after plating in the upgrade order (false = original laser order).
-	tweakNano = false
+	tweakNano = true
 
 	// Squad (practice) parameters, applied by squadParams only.
 	// tweakFinish: range (m) we close to on a weak foe (Params.Finish, 14 = original).
@@ -22,7 +22,7 @@ const (
 	// tweakFinishHP: foe HP fraction under which we close in (Params.FinishHP, 0 = original 0.38).
 	tweakFinishHP = 0.0
 	// tweakFinishRush: boost while closing in on a weak foe more than 2*Finish away with energy > 30 (Params.FinishRush, false = original).
-	tweakFinishRush = true
+	tweakFinishRush = false
 	// tweakPursue: chase an engaged foe out of line of sight when its HP fraction is under this (Params.Pursue, 1.01 = original: always).
 	tweakPursue = 1.01
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
