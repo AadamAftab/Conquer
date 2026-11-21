@@ -9,7 +9,7 @@ import { angDiff, clamp, type V2, type V3 } from "./geom.ts"
 const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate", "laser_charge", "gun_damage", "capacitor", "reactor", "gyros", "lightning_range", "gun_mag", "sensors", "gun_velocity", "servos", "jets", "lightning_chain", "laser_pierce"]
 /** Tunables of the practice core (BOTP env var overrides them in local tests). */
 export const PP = {
-  laserRange: 120,
+  laserRange: 145,
   gunRange: 85,
   lightRange: 28,
   retreatHp: 0.38,
@@ -56,7 +56,7 @@ export const PP = {
   /** plain linear gun lead (2 iterations, +0.05 s, vertical clamp 6 m) instead of the strafe model */
   linearLead: false,
   /** practice core: "lance" (Practice, best real 4.75) or "econ" (Econ core) */
-  core: "lance" as "lance" | "econ",
+  core: "econ" as "lance" | "econ",
   /** econ core preferred fight distances (laser / gun-only / lightning) */
   econLaser: 145,
   econGun: 70,
@@ -121,16 +121,16 @@ export const PP = {
   unseenCover: "off" as "off" | "ffa" | "all",
   /** practice ("lance") core, squad-mode methods of the public giddy bot (5.8): */
   /** retreat = TTUN losing rule, held only 1.5 s after the last losing signal */
-  sqLose: true,
+  sqLose: false,
   /** close in to this distance on a target below sqFinishHp (0 = off) */
-  sqFinishR: 14,
+  sqFinishR: 0,
   sqFinishHp: 0.38,
   /** release a partly charged laser when 80% of its damage kills */
-  sqLethal: true,
+  sqLethal: false,
   /** go for cubes this close even mid-fight (x0.57 when below half hp; 0 = off) */
-  sqFightCube: 70,
+  sqFightCube: 0,
   /** only engage mechs that are close, hit us, close in, aim at us, are weak, or late game; max 240 m */
-  sqEngage: true,
+  sqEngage: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
