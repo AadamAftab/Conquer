@@ -328,6 +328,40 @@ export class Econ {
         mode = "drone-back"
       }
     }
+    // shot by someone we cannot see: cover from the hit bearing (not loot or stand still)
+    if ((PP.unseenCover === "all" || (PP.unseenCover === "ffa" && this.ffa)) && !T && t - this.mechHitT < 1.5 && !(zoneGoal && outside)) {
+      const b = this.mechHitBearing
+      const ghost: V3 = [x + Math.cos(b) * 110, y + Math.sin(b) * 110, z + 8]
+      const cv = this.coverFrom(x, y, ghost, 42)
+      goal = cv ?? [x - Math.cos(b) * 20, y - Math.sin(b) * 20]
+      stand = false
+      creep = false
+      if (me.energy > 20) boost = true
+      mode = "unseen-cover"
+    }
+    // free-for-all: a laser charging at us -> get out of its line (cover close by, else sideways)
+    if (this.ffa && PP.ffaLaserLos && !(zoneGoal && outside)) {
+      for (const e of w.tracks.values()) {
+        if (e.kind !== "mech" || !e.charging || t - e.seenT > 0.15) continue
+        const d = dTo(e.pos)
+        if (d > 280 || d < 25) continue
+        if (Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > Math.atan2(6, d) + 0.05) continue
+        const eye: V3 = [e.pos[0], e.pos[1], e.pos[2] + 7]
+        if (!m.los(eye[0], eye[1], eye[2], x, y, z + 4.5)) continue
+        const cv = this.coverFrom(x, y, eye, 18)
+        if (cv) goal = cv
+        else {
+          const ux = (x - e.pos[0]) / d, uy = (y - e.pos[1]) / d
+          const side = this.strafeDir
+          goal = [x - uy * side * 12, y + ux * side * 12]
+        }
+        stand = false
+        creep = false
+        if (me.energy > 12) boost = true
+        mode = "laser-los"
+        break
+      }
+    }
     // ---------- execute movement ----------
     let mv: V2 = [0, 0]
     let jump = false
@@ -464,6 +498,7 @@ export class Econ {
   private coverFrom(x: number, y: number, eye: V3, maxR: number): V2 | null {
     const m = this.h.m, rq = this.h.nav.rq
     const d0 = Math.hypot(x - eye[0], y - eye[1])
+    const seesMode = PP.coverSees === "all" || (PP.coverSees === "ffa" && this.ffa)
     let best: V2 | null = null
     let bs = Infinity
     for (let r = 6; r <= maxR; r += 6)
@@ -471,7 +506,7 @@ export class Econ {
         const a = (k / 16) * Math.PI * 2
         const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r
         if (!m.passable(m.nodeOf(px, py), rq)) continue
-        if (m.los(eye[0], eye[1], eye[2], px, py, m.groundAt(px, py) + 6)) continue
+        if (seesMode ? m.sees(eye[0], eye[1], eye[2], px, py, m.groundAt(px, py) + 6) : m.los(eye[0], eye[1], eye[2], px, py, m.groundAt(px, py) + 6)) continue
         const sc = r - 0.3 * (Math.hypot(px - eye[0], py - eye[1]) - d0)
         if (sc < bs) (bs = sc), (best = [px, py])
       }
@@ -522,7 +557,7 @@ export class Econ {
         if (!m.passable(m.nodeOf(px, py), rq) || !m.walkLine(x, y, px, py, rq)) continue
         const gz = m.groundAt(px, py) + 6
         let n = 0
-        for (const e of eyes) if (m.los(e[0], e[1], e[2], px, py, gz)) n++
+        for (const e of eyes) if (m.sees(e[0], e[1], e[2], px, py, gz)) n++
         const sc = r + 60 * n
         if (sc < bs) (bs = sc), (best = [px, py])
       }

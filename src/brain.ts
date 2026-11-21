@@ -156,6 +156,7 @@ export class Brain {
     // the fake match ran up to t = 3.9 s on our navigator: forget its stuck timers too
     if (RP.warmNav) this.nav.reset()
     else this.nav.resetAll()
+    if (RP.openMode !== "none") (this.nav.openMode = RP.openMode), (this.nav.openUntil = RP.openT)
     if (n < 0) log(n)
   }
 

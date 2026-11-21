@@ -82,6 +82,12 @@ export const PP = {
   ffaFocus: false,
   /** free-for-all: without a laser, take cover from a laser carrier beyond this distance unless it is weak (0 = off) */
   ffaOutgun: 70,
+  /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
+  ffaLaserLos: false,
+  /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
+  coverSees: "off" as "off" | "ffa" | "all",
+  /** hit by a mech we cannot see and nothing targeted: run to cover from the hit bearing instead of looting or healing in place */
+  unseenCover: "off" as "off" | "ffa" | "all",
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

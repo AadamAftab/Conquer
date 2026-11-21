@@ -180,6 +180,9 @@ export class Navigator {
   stuckSide = 1
   rq = 3.4
   costFn: ((n: number) => number) | null = null
+  /** opening move until this time: "hop" turns 60 deg left + jump + boost, "side" turns + boosts on the ground, "jet" jumps + boosts, "boost" boosts */
+  openUntil = 0
+  openMode: "hop" | "side" | "jet" | "boost" = "hop"
 
   constructor(m: GameMap) {
     this.m = m
@@ -275,6 +278,11 @@ export class Navigator {
   }
 
   private applyStuck(d: [number, number], t: number, jump: boolean, boost: boolean) {
+    if (t < this.openUntil) {
+      const md = this.openMode
+      if (md === "hop" || md === "side") d = [d[0] * 0.5 - d[1] * 0.85, d[1] * 0.5 + d[0] * 0.85]
+      return { dir: d, jump: md === "hop" || md === "jet", boost: true, arrived: false }
+    }
     if (t < this.stuckUntil) {
       // side-step and hop
       const s = this.stuckSide

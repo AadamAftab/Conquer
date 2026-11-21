@@ -85,6 +85,7 @@ export class GameMap {
         if (x < b.minX + 1 || x > b.maxX - 1 || y < b.minY + 1 || y > b.maxY - 1) this.wall[j * nx + i] = 1
       }
     for (const p of w.prisms as Prism[]) this.raster(p, stepUp)
+    this.loadTrees(w)
     this.clear = this.distanceTransform()
     // nav nodes
     const NW = (this.NW = Math.floor(nx / 2))
@@ -273,6 +274,113 @@ export class GameMap {
   surfAt(x: number, y: number): number {
     const c = this.cellOf(x, y)
     return c < 0 ? this.groundAt(x, y) : this.surf[c]
+  }
+
+  // ---- trees: crowns fade sight (beyond near range), trunks stop it; shots ignore both ----
+  treeN = 0
+  tcx = new Float32Array(0)
+  tcy = new Float32Array(0)
+  tcz = new Float32Array(0)
+  tcr = new Float32Array(0)
+  trz = new Float32Array(0)
+  tgrid: Int32Array[] = []
+  tgw = 0
+  tgh = 0
+  readonly TG = 8
+  canopyDensity = 0.35
+  canopyBlockT = 0.25
+  private tstamp = new Uint32Array(0)
+  private tgen = 1
+
+  private loadTrees(w: any) {
+    const tr = w.trees
+    if (!tr || !tr.fields || !tr.data) return
+    const F: string[] = tr.fields, D: number[] = tr.data, nf = F.length
+    const ix = (k: string) => F.indexOf(k)
+    const iX = ix("x"), iY = ix("y"), iZ = ix("z"), iH = ix("height"), iR = ix("crownR"), iB = ix("crownBase"), iCX = ix("crownX"), iCY = ix("crownY")
+    const n = Math.floor(D.length / nf)
+    this.treeN = n
+    this.tcx = new Float32Array(n)
+    this.tcy = new Float32Array(n)
+    this.tcz = new Float32Array(n)
+    this.tcr = new Float32Array(n)
+    this.trz = new Float32Array(n)
+    this.tstamp = new Uint32Array(n)
+    if (w.rules?.canopyDensity !== undefined) this.canopyDensity = w.rules.canopyDensity
+    if (w.rules?.canopyBlockT !== undefined) this.canopyBlockT = w.rules.canopyBlockT
+    const G = this.TG
+    this.tgw = Math.ceil((this.nx * this.step) / G) + 1
+    this.tgh = Math.ceil((this.ny * this.step) / G) + 1
+    const cells: number[][] = Array.from({ length: this.tgw * this.tgh }, () => [])
+    for (let k = 0; k < n; k++) {
+      const o = k * nf
+      const x = D[o + iX], y = D[o + iY], z = D[o + iZ], h = D[o + iH], cr = D[o + iR], cb = D[o + iB]
+      const cx = iCX >= 0 && D[o + iCX] !== null && !Number.isNaN(D[o + iCX]) ? D[o + iCX] : x
+      const cy = iCY >= 0 && D[o + iCY] !== null && !Number.isNaN(D[o + iCY]) ? D[o + iCY] : y
+      const v = z + cb, top = z + h
+      this.tcx[k] = cx
+      this.tcy[k] = cy
+      this.tcz[k] = (v + top) / 2
+      this.tcr[k] = cr
+      this.trz[k] = Math.max((top - v) / 2, 0.5)
+      const i0 = Math.floor((cx - cr - this.minX) / G), i1 = Math.floor((cx + cr - this.minX) / G)
+      const j0 = Math.floor((cy - cr - this.minY) / G), j1 = Math.floor((cy + cr - this.minY) / G)
+      for (let j = Math.max(0, j0); j <= Math.min(this.tgh - 1, j1); j++) for (let i = Math.max(0, i0); i <= Math.min(this.tgw - 1, i1); i++) cells[j * this.tgw + i].push(k)
+    }
+    this.tgrid = cells.map((c) => Int32Array.from(c))
+  }
+
+  /** Light that passes the tree crowns between two points (1 = clear, 0 = fully blocked; exits early once blocked). */
+  canopyT(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number {
+    if (!this.treeN) return 1
+    const G = this.TG, dx = x1 - x0, dy = y1 - y0, dz = z1 - z0
+    const L = Math.hypot(dx, dy, dz)
+    const limit = Math.log(1 / this.canopyBlockT) / this.canopyDensity + 0.01
+    const gen = ++this.tgen
+    let acc = 0
+    // walk the 8 m tree cells along the horizontal segment
+    const gx = (x0 - this.minX) / G, gy = (y0 - this.minY) / G, ex = (x1 - this.minX) / G, ey = (y1 - this.minY) / G
+    let i = Math.floor(gx), j = Math.floor(gy)
+    const ie = Math.floor(ex), je = Math.floor(ey)
+    const ddx = ex - gx, ddy = ey - gy
+    const si = ddx > 0 ? 1 : -1, sj = ddy > 0 ? 1 : -1
+    const tdx = ddx !== 0 ? Math.abs(1 / ddx) : Infinity, tdy = ddy !== 0 ? Math.abs(1 / ddy) : Infinity
+    let tmx = ddx > 0 ? (i + 1 - gx) / ddx : ddx < 0 ? (gx - i) / -ddx : Infinity
+    let tmy = ddy > 0 ? (j + 1 - gy) / ddy : ddy < 0 ? (gy - j) / -ddy : Infinity
+    const steps = Math.abs(ie - i) + Math.abs(je - j) + 1
+    for (let k = 0; k < steps; k++) {
+      if (i >= 0 && j >= 0 && i < this.tgw && j < this.tgh) {
+        const list = this.tgrid[j * this.tgw + i]
+        for (let q = 0; q < list.length; q++) {
+          const tr = list[q]
+          if (this.tstamp[tr] === gen) continue
+          this.tstamp[tr] = gen
+          const R = this.tcr[tr], RZ = this.trz[tr]
+          const cx = (x0 - this.tcx[tr]) / R, cy = (y0 - this.tcy[tr]) / R, cz = (z0 - this.tcz[tr]) / RZ
+          const vx = dx / R, vy = dy / R, vz = dz / RZ
+          const A = vx * vx + vy * vy + vz * vz
+          if (A < 1e-9) continue
+          const B = 2 * (cx * vx + cy * vy + cz * vz), C = cx * cx + cy * cy + cz * cz - 1
+          const disc = B * B - 4 * A * C
+          if (disc <= 0) continue
+          const sq = Math.sqrt(disc)
+          const ta = (-B - sq) / (2 * A), tb = (-B + sq) / (2 * A)
+          if (tb < 0 || ta > 1) continue
+          acc += (Math.min(tb, 1) - Math.max(ta, 0)) * L
+          if (acc > limit) return 0
+        }
+      }
+      if (tmx < tmy) (i += si), (tmx += tdx)
+      else (j += sj), (tmy += tdy)
+    }
+    return Math.exp(-this.canopyDensity * acc)
+  }
+
+  /** Server vision test from an eye to a point: solids block; beyond `near` m, dense crowns block too. */
+  sees(ex: number, ey: number, ez: number, x: number, y: number, z: number, near = 45): boolean {
+    if (!this.los(ex, ey, ez, x, y, z)) return false
+    if (Math.hypot(x - ex, y - ey) <= near) return true
+    return this.canopyT(ex, ey, ez, x, y, z) >= this.canopyBlockT
   }
 
   /** Line of sight / shot path between two points, blocked by solids and terrain (not trees). */

@@ -28,6 +28,8 @@ const FFA = process.env.SIMFFA === "1" || !!process.env.SIMBOTS
 const BOTS = process.env.SIMBOTS ?? ""
 // SIMINVIS=s: measurement only, nobody sees us for the first s seconds
 const INVIS = Number(process.env.SIMINVIS ?? 0)
+// SIMCANOPY=0 turns off the tree crowns in vision (on by default: the server fades sight through dense crowns beyond near range)
+const CANOPY = process.env.SIMCANOPY !== "0"
 // SIMMODE=lance: house model of a public 4.75 bot's sim (all 15 hunt within a tier chase radius,
 // tier fire ranges, aim noise per tier x SIMLF, lasers on the 3 experts)
 const LANCE = process.env.SIMMODE === "lance"
@@ -215,6 +217,7 @@ function runMatch(seed: number) {
     if (d > C.vision.range) return false
     if (d > C.vision.near_range && Math.abs(angDiff(Math.atan2(b.pos[1] - a.pos[1], b.pos[0] - a.pos[0]), a.aim[0])) > (C.vision.fov_deg / 2) * D2R) return false
     const ez = a.pos[2] + 8
+    if (CANOPY) return MAP.sees(a.pos[0], a.pos[1], ez, b.pos[0], b.pos[1], b.pos[2] + b.height / 2, C.vision.near_range) || MAP.sees(a.pos[0], a.pos[1], ez, b.pos[0], b.pos[1], b.pos[2] + b.height, C.vision.near_range)
     return MAP.los(a.pos[0], a.pos[1], ez, b.pos[0], b.pos[1], b.pos[2] + b.height / 2) || MAP.los(a.pos[0], a.pos[1], ez, b.pos[0], b.pos[1], b.pos[2] + b.height)
   }
   const sound = (src: V3, kind: string, except: number) => {
@@ -630,6 +633,7 @@ function buildObs(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, live: Mech[]
     const d = Math.hypot(p[0] - m.pos[0], p[1] - m.pos[1])
     if (d > C.vision.range) return false
     if (d > C.vision.near_range && Math.abs(angDiff(Math.atan2(p[1] - m.pos[1], p[0] - m.pos[0]), m.aim[0])) > (C.vision.fov_deg / 2) * D2R) return false
+    if (CANOPY) return MAP.sees(m.pos[0], m.pos[1], m.pos[2] + 8, p[0], p[1], p[2] + h, C.vision.near_range)
     return MAP.los(m.pos[0], m.pos[1], m.pos[2] + 8, p[0], p[1], p[2] + h)
   }
   for (const n of npcs) if (n.alive && vis(n.pos, 2)) m.seen.set(n.id, t)
