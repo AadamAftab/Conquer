@@ -1071,11 +1071,24 @@ func (b *Brain) step(o *Obs, act *Action) {
 		var gy, gp float64
 		gunOK := false
 		if gun != nil {
-			gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded)
+			if tweakLeadK > 0 && b.pracOn && isMech {
+				t0 := 0.05
+				if gun.Cooldown <= 0.05 {
+					t0 = 0
+				}
+				gy, gp = b.leadK(muzzle, tp, tv, gun.Stats.Speed, grounded, t0, tweakLeadK)
+			} else {
+				gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded)
+			}
 			gunOK = dist <= gun.Stats.Range*0.96
 		}
 
-		dp := Vec3{tp[0] + tv[0]*(lat+0.05), tp[1] + tv[1]*(lat+0.05), tp[2]}
+		laserSlew := tweakLaserSlew && b.pracOn
+		dpT := lat + 0.05
+		if laserSlew {
+			dpT = 0.05
+		}
+		dp := Vec3{tp[0] + tv[0]*dpT, tp[1] + tv[1]*dpT, tp[2]}
 		hy := math.Atan2(dp[1]-muzzle[1], dp[0]-muzzle[0])
 		hp := math.Atan2(dp[2]-muzzle[2], hyp(dp[0]-muzzle[0], dp[1]-muzzle[1]))
 		aim = [2]float64{gy, gp}
@@ -1089,6 +1102,16 @@ func (b *Brain) step(o *Obs, act *Action) {
 			ey := math.Max(0, math.Abs(angDiff(wantY, me.Aim[0]))-st.TurnRate*0.05)
 			ep := math.Max(0, math.Abs(wantP-me.Aim[1])-st.PitchRate*0.05)
 			return ey < tolY && ep < tolP
+		}
+		// laser release check (tweakLaserSlew: allowing the turn of the tick before the beam leaves)
+		beamOn := func() bool {
+			ey := math.Abs(angDiff(hy, me.Aim[0]))
+			ep := math.Abs(hp - me.Aim[1])
+			if laserSlew {
+				ey = math.Max(0, ey-st.TurnRate*0.05)
+				ep = math.Max(0, ep-st.PitchRate*0.05)
+			}
+			return ey < tolY*0.9 && ep < tolP
 		}
 		for i, w := range me.Weapons {
 			if w == nil || i > 1 {
@@ -1122,7 +1145,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 					if tweakLethalK > 0 && b.pracOn {
 						lk = tweakLethalK
 					}
-					if dmg*lk >= target.HP && math.Abs(angDiff(hy, me.Aim[0])) < tolY*0.9 && math.Abs(hp-me.Aim[1]) < tolP {
+					if dmg*lk >= target.HP && beamOn() {
 						aim = [2]float64{hy, hp}
 						act.Fire[i] = false
 						break
@@ -1130,14 +1153,12 @@ func (b *Brain) step(o *Obs, act *Action) {
 				}
 				if w.Charge < full-0.051 {
 					act.Fire[i] = true
-					if w.Charge > full*0.45 {
+					if w.Charge > full*0.45 && !(laserSlew && gun != nil) {
 						aim = [2]float64{hy, hp}
 					}
 				} else {
 					aim = [2]float64{hy, hp}
-					ey := math.Abs(angDiff(hy, me.Aim[0]))
-					ep := math.Abs(hp - me.Aim[1])
-					if ey < tolY*0.9 && ep < tolP {
+					if beamOn() {
 						act.Fire[i] = false
 					} else {
 						act.Fire[i] = true
@@ -1159,6 +1180,15 @@ func (b *Brain) step(o *Obs, act *Action) {
 					if ey < 0.04 && ep < 0.03 {
 						act.Fire[i] = true
 					}
+				}
+			}
+		}
+		if laserSlew && gun != nil {
+			// the bullet follows the torso: hold it when another weapon moved the aim off the gun lead
+			for i, w := range me.Weapons {
+				if i < 2 && w != nil && w.Kind == "gun" && act.Fire[i] &&
+					(math.Abs(angDiff(aim[0], gy)) > tolY || math.Abs(aim[1]-gp) > tolP) {
+					act.Fire[i] = false
 				}
 			}
 		}
@@ -1335,6 +1365,26 @@ func (b *Brain) lead(muzzle, tp, tv Vec3, speed float64, grounded bool) (float64
 	var px, py, pz float64
 	for k := 0; k < 4; k++ {
 		tt := lat + t
+		px, py, pz = tp[0]+tv[0]*tt, tp[1]+tv[1]*tt, tp[2]
+		if !grounded {
+			pz += tv[2] * tt * 0.5
+		}
+		d := math.Sqrt((px-muzzle[0])*(px-muzzle[0]) + (py-muzzle[1])*(py-muzzle[1]) + (pz-muzzle[2])*(pz-muzzle[2]))
+		t = math.Max(0, d-3) / speed
+	}
+	return math.Atan2(py-muzzle[1], px-muzzle[0]), math.Atan2(pz-muzzle[2], hyp(px-muzzle[0], py-muzzle[1]))
+}
+
+// leadK (tweakLeadK): the shot leaves t0 s after the observation and covers its first 3 m at once;
+// the target's predicted travel over the time to impact is scaled by k.
+func (b *Brain) leadK(muzzle, tp, tv Vec3, speed float64, grounded bool, t0, k float64) (float64, float64) {
+	if speed <= 0 {
+		speed = 252
+	}
+	t := 0.0
+	var px, py, pz float64
+	for it := 0; it < 4; it++ {
+		tt := k * (t0 + t)
 		px, py, pz = tp[0]+tv[0]*tt, tp[1]+tv[1]*tt, tp[2]
 		if !grounded {
 			pz += tv[2] * tt * 0.5
