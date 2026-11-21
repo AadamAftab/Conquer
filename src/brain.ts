@@ -1,4 +1,4 @@
-import { draw, log, type BotAction, type Hello, type Observation, type SelfObs, type WeaponObs } from "../mechfight.ts"
+import { draw, log, type BotAction, type DropObs, type Hello, type Observation, type SelfObs, type WeaponObs } from "../mechfight.ts"
 import { GameMap } from "./map.ts"
 import { Navigator } from "./nav.ts"
 import { World, type Track } from "./world.ts"
@@ -165,7 +165,8 @@ export class Brain {
       const radius = shoot.kind === "npc" ? 1.5 : 2.5 * (1 + this.perCube * shoot.cubes)
       aim = direct
       let laserBusy = false
-      if (iLaser >= 0) {
+      const isCrate = shoot.id >= 1000 && shoot.id < 5000
+      if (iLaser >= 0 && !isCrate) {
         const L = slots[iLaser]!
         const charge = L.charge ?? 0
         const full = L.stats.charge ?? 0.75
@@ -223,6 +224,7 @@ export class Brain {
     const zoneSoon = w.zoneMargin(x, y, t + 10)
     const zGoal = this.zoneGoal(obs, x, y, rq)
     const dodge = this.mortarDodge(obs, x, y)
+    let drop: DropObs | null = null
     const go = (gx: number, gy: number, budget = 5000) => {
       const r = this.nav.steer(x, y, gx, gy, t, budget)
       if (r.jump) jump = true
@@ -238,6 +240,14 @@ export class Brain {
       const r = go(zGoal[0], zGoal[1])
       mv = r.dir
       if (zoneNow < 2 || zoneSoon < -15) boost = boost || me.energy > 10
+    } else if ((drop = this.dropGoal(obs, x, y, t, enemies, hpFrac))) {
+      this.state = "drop"
+      const dd = Math.hypot(drop.pos[0] - x, drop.pos[1] - y)
+      if (dd > Math.max(1.5, drop.radius - 4)) {
+        const r = go(drop.pos[0], drop.pos[1])
+        mv = r.dir
+        if (dd > 60 && me.energy > 50 && drop.lands_in < dd / 11) boost = true
+      }
     } else if (this.retreating) {
       this.state = "retreat"
       const threat = this.threatPos(x, y, z)
@@ -318,6 +328,25 @@ export class Brain {
     return act
   }
 
+  /** A supply drop worth going for: reachable before others settle on it, not contested, inside the zone. */
+  private dropGoal(obs: Observation, x: number, y: number, t: number, enemies: Track[], hpFrac: number): DropObs | null {
+    let best: DropObs | null = null
+    let bd = Infinity
+    const meId = obs.self.id
+    for (const d of obs.drops) {
+      const dist = Math.hypot(d.pos[0] - x, d.pos[1] - y)
+      const maxD = hpFrac < 0.6 ? 320 : 240
+      if (dist > maxD) continue
+      const travel = dist / 11
+      if (d.lands_in > travel + 8) continue
+      if (d.holder !== null && d.holder !== meId) continue
+      if (enemies.some((e) => Math.hypot(e.pos[0] - d.pos[0], e.pos[1] - d.pos[1]) < 45 && this.w.t - e.seenT < 1)) continue
+      if (this.w.zoneMargin(d.pos[0], d.pos[1], t + travel + 6) < 3) continue
+      if (dist < bd) (bd = dist), (best = d)
+    }
+    return best
+  }
+
   /** Is an enemy with lightning close enough to short our laser? */
   private shortRisk(enemies: Track[], x: number, y: number) {
     return enemies.some((e) => e.weapons.includes("lightning") && Math.hypot(e.pos[0] - x, e.pos[1] - y) < 55)
@@ -353,8 +382,29 @@ export class Brain {
     const m = this.m
     const comp = m.comp(rq)
     const s = m.snap(x, y, rq, -1, 6)
-    const n = m.snap(gx, gy, rq, s >= 0 ? comp[s] : -1, 60)
+    const myComp = s >= 0 ? comp[s] : -1
+    const n = m.snap(gx, gy, rq, myComp, 60)
     if (n >= 0) (gx = m.nodeX(n)), (gy = m.nodeY(n))
+    // prefer a spot hugging a wall nearby (fewer angles to be shot from)
+    if (R >= 45) {
+      let bs = Infinity
+      let bx = gx, by = gy
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2
+        for (const r of [0, 8, 16, 26, 38]) {
+          if (r === 0 && k > 0) continue
+          const px = gx + Math.cos(a) * r, py = gy + Math.sin(a) * r
+          const q = m.nodeOf(px, py)
+          if (!m.passable(q, rq) || (myComp >= 0 && comp[q] !== myComp)) continue
+          if (Math.hypot(px - cx, py - cy) > R * 0.7) continue
+          const cl = m.nClear[q]
+          const sc = r * 0.15 + (cl > rq + 2.5 ? 6 : 0) + Math.abs(cl - (rq + 1)) * 0.8
+          if (sc < bs) (bs = sc), (bx = m.nodeX(q)), (by = m.nodeY(q))
+        }
+      }
+      gx = bx
+      gy = by
+    }
     this.holdGoal = [gx, gy]
     this.holdKey = key
     return this.holdGoal
