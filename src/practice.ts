@@ -56,7 +56,7 @@ export const PP = {
   /** plain linear gun lead (2 iterations, +0.05 s, vertical clamp 6 m) instead of the strafe model */
   linearLead: false,
   /** practice core: "lance" (Practice, best real 4.75) or "econ" (Econ core) */
-  core: "lance" as "lance" | "econ",
+  core: "econ" as "lance" | "econ",
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
