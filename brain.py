@@ -61,8 +61,8 @@ class Brain:
             self._transition(self.ENDGAME_SURVIVAL)
             return self.state
 
-        # 2. Critical health escape: only disengage if HP is dangerously low (<350) AND under multi-threat
-        if hp < 350.0 and threat_count >= 2:
+        # 2. Critical health escape: only disengage if HP is dangerously low (< 350) and facing threats
+        if hp < 350.0 and (threat_count >= 1 or any_visible):
             self._transition(self.DISENGAGE_REGEN)
             return self.state
 

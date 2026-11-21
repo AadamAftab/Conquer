@@ -45,23 +45,11 @@ def compute_mrm(
     is_on_roof:   bool = False,      # already on a roof
     rooftop_goal: Optional[Vec2] = None,  # (gx, gy) of nearest roof goal
     prev_dir:     Optional[Vec2] = None,  # previous movement direction
+    world = None,
+    state: str = "",
 ) -> Vec2:
     """
     Evaluate MRM and return the best (dx, dy) normalised movement direction.
-
-    Parameters
-    ----------
-    pos               : current [x, y, z]
-    enemy_positions   : list of visible/believed enemy [x, y, z]
-    zone_cx/cy/r      : current safe zone
-    next_zone_cx/cy/r : next safe zone (pre-rotate toward it)
-    is_on_roof        : if True, roof bonus is suppressed (already there)
-    rooftop_goal      : if set, adds a pull toward the nearest rooftop
-    prev_dir          : previous tick's move direction (for jitter penalty)
-
-    Returns
-    -------
-    (dx, dy) normalised to length 1 — feed directly into action["move"].
     """
     sx, sy = pos[0], pos[1]
     n      = C.MRM_CANDIDATES     # 16 candidates
@@ -77,12 +65,12 @@ def compute_mrm(
         cy    = sy + r * math.sin(angle)
 
         cost = _risk(
-            cx, cy, pos[2],
+            sx, sy, cx, cy, pos[2],
             enemy_positions,
             zone_cx, zone_cy, zone_r,
             next_zone_cx, next_zone_cy, next_zone_r,
             is_on_roof, rooftop_goal, prev_dir,
-            angle,
+            angle, world, state,
         )
 
         if cost < best_cost:
@@ -90,8 +78,6 @@ def compute_mrm(
             best_dx   = math.cos(angle)
             best_dy   = math.sin(angle)
 
-    # If all candidates are behind zone walls (all infinite), just head to
-    # the next zone centre as a safe fallback.
     if best_cost >= C.W_ZONE_OOB * 0.5:
         gx = next_zone_cx - sx
         gy = next_zone_cy - sy
@@ -106,7 +92,7 @@ def compute_mrm(
 # ---------------------------------------------------------------------------
 
 def _risk(
-    cx: float, cy: float, cz: float,
+    sx: float, sy: float, cx: float, cy: float, cz: float,
     enemy_positions: List[List[float]],
     zone_cx: float, zone_cy: float, zone_r: float,
     next_zone_cx: float, next_zone_cy: float, next_zone_r: float,
@@ -114,45 +100,70 @@ def _risk(
     rooftop_goal: Optional[Vec2],
     prev_dir: Optional[Vec2],
     angle: float,
+    world = None,
+    state: str = "",
 ) -> float:
     """Return the total risk score for candidate point (cx, cy)."""
     cost = 0.0
 
-    # ---- Enemy proximity penalty: sum of w / dist² per threat ----
+    # ---- 1. Wall Awareness: Sample candidate vector at 4m, 8m, 14m ----
+    if world is not None:
+        for d in (4.0, 8.0, 14.0):
+            sample_x = sx + d * math.cos(angle)
+            sample_y = sy + d * math.sin(angle)
+            if not world.is_walkable(sample_x, sample_y, cz):
+                cost += 50000.0 / d
+
+    # ---- 2. Slicing the Pie (Cover & Line-of-Sight Isolation) ----
+    if world is not None and enemy_positions:
+        # Count how many tracked threats have direct LOS to candidate
+        enemies_with_los = 0
+        for ep in enemy_positions:
+            if world.has_los_2d(cx, cy, cz + 4.5, ep[0], ep[1], ep[2] + 4.5):
+                enemies_with_los += 1
+
+        if state == "DISENGAGE_REGEN":
+            # Reward finding complete cover (0 enemies with LOS triggers regen!)
+            if enemies_with_los == 0:
+                cost -= 600.0
+            else:
+                cost += 400.0 * enemies_with_los
+        elif state in ("AMBUSH_HUNTER", "ENDGAME_SURVIVAL"):
+            # Strongly penalize getting caught in multi-bot crossfire!
+            if enemies_with_los >= 2:
+                cost += 350.0 * (enemies_with_los - 1)
+            elif enemies_with_los == 1:
+                cost -= 250.0  # Reward isolating 1v1 fights!
+
+    # ---- 3. Enemy proximity penalty (inverse-square) ----
     for ep in enemy_positions:
         d2 = max(1.0, (cx - ep[0]) ** 2 + (cy - ep[1]) ** 2)
         cost += C.W_ENEMY_PROXIMITY / d2
 
-    # ---- Zone constraints ----
+    # ---- 4. Zone constraints (Strict barrier against storm) ----
     dist_from_zone_centre = math.hypot(cx - zone_cx, cy - zone_cy)
-
     if dist_from_zone_centre > zone_r:
-        # Hard barrier: candidate is outside the safe zone
         return C.W_ZONE_OOB
 
-    # Gradient near zone edge (penalty rises as we approach the wall)
     margin = zone_r - dist_from_zone_centre
     if margin < 10.0:
         cost += C.W_ZONE_NEAR_BORDER / max(0.5, margin)
 
-    # Soft pull toward next zone centre so we pre-rotate before shrink
     dist_from_next = math.hypot(cx - next_zone_cx, cy - next_zone_cy)
     if dist_from_next > next_zone_r * 0.95:
         cost += 20.0 * (dist_from_next - next_zone_r * 0.95)
 
-    # ---- Rooftop incentive ----
+    # ---- 5. Rooftop incentive ----
     if not is_on_roof and rooftop_goal is not None:
         gx, gy = rooftop_goal
         dist_to_goal = math.hypot(cx - gx, cy - gy)
-        # Strong pull toward the rooftop approach waypoint
         cost += C.W_ROOF_BONUS * math.exp(-0.03 * dist_to_goal)
 
-    # ---- Reversal penalty ----
+    # ---- 6. Reversal penalty ----
     if prev_dir is not None:
         prev_dx, prev_dy = prev_dir
-        # Dot product: 1 = same direction, -1 = opposite
         dot = prev_dx * math.cos(angle) + prev_dy * math.sin(angle)
-        if dot < -0.5:   # more than ~120° turn
+        if dot < -0.5:
             cost += C.W_REVERSAL * (-dot)
 
     return cost

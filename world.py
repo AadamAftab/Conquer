@@ -47,6 +47,10 @@ class Prism:
     top: float                 # top z (m)
     ring: List[Tuple[float, float]]  # 2D footprint polygon [(x,y), ...]
     holes: List[List[Tuple[float, float]]] = field(default_factory=list)
+    min_x: float = 0.0
+    min_y: float = 0.0
+    max_x: float = 0.0
+    max_y: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -219,19 +223,43 @@ class WorldIndex:
             self._tmin_x, self._tmin_y, self._tstep = \
             _load_terrain(terrain_path, terrain_meta)
 
-        # --- Parse all prisms ---
+        # --- Parse all prisms & build 2D Spatial Hash Grid ---
+        self.CELL_SIZE = 20.0
         self.prisms: List[Prism] = []
+        self._grid: dict = {}
+
         for raw in world.get("prisms", []):
             ring  = _ring_to_pairs(raw.get("ring", []))
             holes = [_ring_to_pairs(h) for h in raw.get("holes", [])]
             if len(ring) >= 3:
-                self.prisms.append(Prism(
+                xs = [p[0] for p in ring]
+                ys = [p[1] for p in ring]
+                min_x, max_x = min(xs), max(xs)
+                min_y, max_y = min(ys), max(ys)
+                prism = Prism(
                     kind  = raw.get("kind", "building"),
                     base  = float(raw.get("base", 0.0)),
                     top   = float(raw.get("top",  0.0)),
                     ring  = ring,
                     holes = holes,
-                ))
+                    min_x = min_x,
+                    min_y = min_y,
+                    max_x = max_x,
+                    max_y = max_y,
+                )
+                self.prisms.append(prism)
+
+                # Populate spatial grid cells
+                gx0 = int(math.floor(min_x / self.CELL_SIZE))
+                gx1 = int(math.floor(max_x / self.CELL_SIZE))
+                gy0 = int(math.floor(min_y / self.CELL_SIZE))
+                gy1 = int(math.floor(max_y / self.CELL_SIZE))
+                for gx in range(gx0, gx1 + 1):
+                    for gy in range(gy0, gy1 + 1):
+                        cell = (gx, gy)
+                        if cell not in self._grid:
+                            self._grid[cell] = []
+                        self._grid[cell].append(prism)
 
         # --- Extract rooftops ---
         self.rooftops: List[Rooftop] = []
@@ -299,56 +327,97 @@ class WorldIndex:
                 h11 * tx       * ty)
 
     # ------------------------------------------------------------------
-    # Prism collision
+    # Prism collision & LOS Queries (Accelerated via Spatial Grid)
     # ------------------------------------------------------------------
 
     def point_in_prism(self, x: float, y: float, z: float) -> bool:
         """
         Returns True if the world point (x, y, z) lies inside any solid prism.
-        Uses fast footprint bounding-box pre-filter before ray-casting.
+        Accelerated via 2D spatial hash grid (O(1) lookup).
         """
-        for prism in self.prisms:
+        if not hasattr(self, "_grid"):
+            return False
+        gx = int(math.floor(x / self.CELL_SIZE))
+        gy = int(math.floor(y / self.CELL_SIZE))
+        candidate_prisms = self._grid.get((gx, gy), [])
+        for prism in candidate_prisms:
             if z < prism.base or z > prism.top:
                 continue
+            if x < prism.min_x or x > prism.max_x or y < prism.min_y or y > prism.max_y:
+                continue
             if _point_in_polygon(x, y, prism.ring):
-                # Check it's not inside a hole
                 in_hole = any(_point_in_polygon(x, y, h) for h in prism.holes)
                 if not in_hole:
                     return True
-        return False
-
-    def _segment_hits_prism(self, x0: float, y0: float,
-                             x1: float, y1: float,
-                             z_avg: float) -> bool:
-        """
-        Fast 2D segment–polygon intersect test at a given average height.
-        Used for lightweight LOS approximation (not exact 3D raycasting).
-        """
-        for prism in self.prisms:
-            if z_avg < prism.base or z_avg > prism.top:
-                continue
-            # Test a few points along the segment
-            steps = max(2, int(math.hypot(x1 - x0, y1 - y0) / 3.0))
-            for s in range(1, steps):
-                t = s / steps
-                mx = x0 + (x1 - x0) * t
-                my = y0 + (y1 - y0) * t
-                if _point_in_polygon(mx, my, prism.ring):
-                    in_hole = any(_point_in_polygon(mx, my, h) for h in prism.holes)
-                    if not in_hole:
-                        return True
         return False
 
     def has_los_2d(self,
                    x0: float, y0: float, z0: float,
                    x1: float, y1: float, z1: float) -> bool:
         """
-        Approximate horizontal line-of-sight check between two 3D points.
-        Checks whether any building prism blocks the XY segment at the
-        average height. Good enough for target selection; not physically exact.
+        Line-of-sight check between two 3D points.
+        Steps along the 2D segment (every 3.0 m), interpolates z linearly (z = z0 + (z1 - z0) * t),
+        and tests prisms in the current 20m x 20m grid cell.
+        Returns False immediately if any prism blocks the ray.
         """
-        z_avg = (z0 + z1) * 0.5
-        return not self._segment_hits_prism(x0, y0, x1, y1, z_avg)
+        if not hasattr(self, "_grid"):
+            return True
+        dist = math.hypot(x1 - x0, y1 - y0)
+        if dist < 0.1:
+            return True
+
+        # Step every 3.0 m along the segment
+        steps = max(2, int(math.ceil(dist / 3.0)))
+        current_cell = None
+        cell_prisms = []
+
+        for s in range(1, steps):
+            t = s / steps
+            mx = x0 + (x1 - x0) * t
+            my = y0 + (y1 - y0) * t
+            mz = z0 + (z1 - z0) * t
+
+            cell = (int(mx // self.CELL_SIZE), int(my // self.CELL_SIZE))
+            if cell != current_cell:
+                current_cell = cell
+                cell_prisms = self._grid.get(cell, [])
+
+            for prism in cell_prisms:
+                if prism.base <= mz <= prism.top:
+                    if prism.min_x <= mx <= prism.max_x and prism.min_y <= my <= prism.max_y:
+                        if _point_in_polygon(mx, my, prism.ring):
+                            in_hole = any(_point_in_polygon(mx, my, h) for h in prism.holes)
+                            if not in_hole:
+                                return False
+        return True
+
+    def is_walkable(self, x: float, y: float, z: float) -> bool:
+        """
+        Returns False if (x, y, z + 1.5) (step_up 1.2 m) or (x, y, z + 8.5) (9 m head/bridge clearance)
+        is inside any solid obstacle prism, or if terrain slope exceeds 50 degrees.
+        """
+        if self.point_in_prism(x, y, z + 1.5):
+            return False
+        if self.point_in_prism(x, y, z + 8.5):
+            return False
+
+        if self._terrain is not None:
+            h_east  = self.terrain_height(x + 1.0, y)
+            h_west  = self.terrain_height(x - 1.0, y)
+            h_north = self.terrain_height(x, y + 1.0)
+            h_south = self.terrain_height(x, y - 1.0)
+            dx = (h_east - h_west) * 0.5
+            dy = (h_north - h_south) * 0.5
+            # tan(50°)^2 ≈ 1.42
+            if (dx * dx + dy * dy) > 1.42:
+                return False
+        return True
+
+    def point_in_rooftop(self, x: float, y: float, rooftop: Rooftop) -> bool:
+        """Returns True if (x, y) is strictly inside the given rooftop's polygon."""
+        if rooftop is None or not rooftop.polygon:
+            return False
+        return _point_in_polygon(x, y, rooftop.polygon)
 
     # ------------------------------------------------------------------
     # Rooftop queries

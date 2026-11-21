@@ -1,15 +1,17 @@
 """
-motion.py — High-Performance 3D Movement Controller: Reverse-Kiting & Zone Control.
+motion.py — High-Performance 3D Movement Controller: Reverse-Kiting, Cover Seeking & Zone Control.
 
 Priorities:
   1. Safe Zone Survival: Never step into the deadly gas wall. If outside or near the edge,
      pull hard toward zone["next_center"] with boost.
-  2. Reverse-Kiting: When an enemy closes in (< 25 m), boost backward to maintain distance
+  2. Tactical Cover / Disengage: In DISENGAGE_REGEN, uses MRM cover-slicing to break line of sight
+     behind building corners without leaving the safe zone.
+  3. Reverse-Kiting: When an enemy closes in (< 25 m), boost backward to maintain distance
      and prevent rear-armor exposure while the torso delivers 100% firepower.
-  3. Tactical Strafing: When in mid-range (25–45 m), strafe unpredictably via MRM to evade
+  4. Tactical Strafing: When in mid-range (25–45 m), strafe unpredictably via MRM to evade
      enemy bullets and mortar splash.
-  4. Dynamic Looting: In the absence of combat, rapidly sweep up nearby power cubes and weapons
-     along the path to the zone center.
+  5. Roof Safety: Prevents accidentally stepping off rooftops.
+  6. Dynamic Looting & Drops: Prioritizes power cubes, supply drops, and weapon upgrades.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from typing import List, Optional, Tuple
 
 import config as C
 import risk as R
-from world import Rooftop
+from world import Rooftop, WorldIndex
 
 Vec2 = Tuple[float, float]
 
@@ -38,6 +40,7 @@ class MotionController:
         combat_aim:      Optional[List[float]],
         is_on_roof:      bool,
         nav_goal:        Optional[Vec2] = None,
+        world:           Optional[WorldIndex] = None,
     ) -> dict:
         me       = obs["self"]
         pos      = me["pos"]
@@ -67,7 +70,30 @@ class MotionController:
             return {"move": [dx, dy], "boost": boost, "jump": jump}
 
         # ------------------------------------------------------------------
-        # RULE 2: ACTIVE COMBAT KITING (Reverse-Kite & Strafe)
+        # RULE 2: DISENGAGE & DUCK BEHIND COVER
+        # ------------------------------------------------------------------
+        if state == "DISENGAGE_REGEN":
+            dx, dy = R.compute_mrm(
+                pos             = pos,
+                enemy_positions = enemy_positions,
+                zone_cx         = zone_cx,
+                zone_cy         = zone_cy,
+                zone_r          = zone_r,
+                next_zone_cx    = next_cx,
+                next_zone_cy    = next_cy,
+                next_zone_r     = next_r,
+                is_on_roof      = is_on_roof,
+                rooftop_goal    = None,
+                prev_dir        = self._prev_dir,
+                world           = world,
+                state           = state,
+            )
+            boost = energy > 20.0 and grounded
+            self._prev_dir = (dx, dy)
+            return {"move": [dx, dy], "boost": boost, "jump": False}
+
+        # ------------------------------------------------------------------
+        # RULE 3: ACTIVE COMBAT KITING (Reverse-Kite & Strafe)
         # ------------------------------------------------------------------
         if enemy_positions:
             closest_enemy = min(enemy_positions, key=lambda e: math.hypot(e[0] - sx, e[1] - sy))
@@ -91,10 +117,16 @@ class MotionController:
                     flee_x, flee_y = move_x / m_len, move_y / m_len
 
                 boost = energy > 20.0 and grounded
+
+                # Check rooftop containment
+                if is_on_roof and rooftop_goal and world:
+                    if not world.point_in_rooftop(sx + flee_x * 2.0, sy + flee_y * 2.0, rooftop_goal):
+                        flee_x, flee_y = R.direction_to(sx, sy, rooftop_goal.centroid_x, rooftop_goal.centroid_y)
+
                 self._prev_dir = (flee_x, flee_y)
                 return {"move": [flee_x, flee_y], "boost": boost, "jump": False}
 
-            # Mid-range threat (25–45 m): MRM strafe to dodge incoming projectiles
+            # Mid-range threat (25–45 m): MRM strafe to dodge incoming projectiles & slice the pie
             elif dist_to_threat <= 45.0:
                 dx, dy = R.compute_mrm(
                     pos             = pos,
@@ -108,7 +140,15 @@ class MotionController:
                     is_on_roof      = is_on_roof,
                     rooftop_goal    = None,
                     prev_dir        = self._prev_dir,
+                    world           = world,
+                    state           = state,
                 )
+
+                # Check rooftop containment
+                if is_on_roof and rooftop_goal and world:
+                    if not world.point_in_rooftop(sx + dx * 2.0, sy + dy * 2.0, rooftop_goal):
+                        dx, dy = R.direction_to(sx, sy, rooftop_goal.centroid_x, rooftop_goal.centroid_y)
+
                 self._prev_dir = (dx, dy)
                 return {"move": [dx, dy], "boost": False, "jump": False}
 
@@ -119,9 +159,18 @@ class MotionController:
                 return {"move": [dx, dy], "boost": energy > 40.0, "jump": False}
 
         # ------------------------------------------------------------------
-        # RULE 3: ROTATE & LOOT (No enemies in sight)
+        # RULE 4: ROTATE, SUPPLY DROPS & LOOT (No enemies in sight)
         # ------------------------------------------------------------------
-        # Priority A: nearby power cubes (< 25m)
+        # Priority A: Supply drop nearby (3 cubes + full heal)
+        for drop in obs.get("drops", []):
+            dpos = drop.get("pos", [0, 0, 0])
+            dist_drop = math.hypot(dpos[0] - sx, dpos[1] - sy)
+            if dist_drop <= 80.0 and drop.get("lands_in", 99.0) <= 6.0 and len(enemy_positions) == 0:
+                dx, dy = R.direction_to(sx, sy, dpos[0], dpos[1])
+                self._prev_dir = (dx, dy)
+                return {"move": [dx, dy], "boost": True, "jump": False}
+
+        # Priority B: nearby power cubes (< 25m)
         for cube in obs.get("cubes", []):
             cx, cy = cube["pos"][0], cube["pos"][1]
             if math.hypot(cx - sx, cy - sy) < 25.0:
@@ -129,9 +178,9 @@ class MotionController:
                 self._prev_dir = (dx, dy)
                 return {"move": [dx, dy], "boost": True, "jump": False}
 
-        # Priority B: weapon pickup if slot 1 is empty or upgradeable (< 30m)
+        # Priority C: weapon pickup if slot 1 is empty or upgradeable (< 30m)
         weapons = me.get("weapons", [None, None])
-        if len(weapons) < 2 or weapons[1] is None or weapons[1].get("kind") == "lightning":
+        if len(weapons) < 2 or weapons[1] is None or weapons[1].get("kind") in ("mortar", "lightning"):
             for pickup in obs.get("pickups", []):
                 px, py = pickup["pos"][0], pickup["pos"][1]
                 if math.hypot(px - sx, py - sy) < 30.0:
@@ -139,7 +188,7 @@ class MotionController:
                     self._prev_dir = (dx, dy)
                     return {"move": [dx, dy], "boost": True, "jump": False}
 
-        # Priority C: advance steadily toward next zone center
+        # Priority D: advance steadily toward next zone center
         dx, dy = R.direction_to(sx, sy, next_cx, next_cy)
         jump   = (self._tick_counter % 40 == 0) and grounded
         self._prev_dir = (dx, dy)

@@ -270,38 +270,74 @@ class LaserController:
 # 3. Target selection
 # ---------------------------------------------------------------------------
 
-def select_target(obs: dict, tracker_beliefs: dict) -> Optional[dict]:
+def select_target(obs: dict, tracker_beliefs: dict, world=None, cubes: int = 0) -> Optional[dict]:
     """
-    Choose the highest-priority target from currently visible mechs and
-    tracker beliefs.
-
-    Priority rules (in order):
-      1. T0 mech with lowest HP (kill it fast to prevent escalation)
-      2. T1 mech with lowest HP (server still tracking — shoot it)
-      3. T0 mech closest to us (threat to our position)
-
-    Returns the mech obs dict (from obs["mechs"]) or a synthesised belief
-    dict with the same keys, or None if nothing is worth targeting.
+    Choose highest-priority target:
+      1. T0 enemy mech with direct LOS (lowest HP first)
+      2. T0 enemy mech without direct LOS (lowest HP first)
+      3. T1 enemy mech from tracker beliefs
+      4. If no enemy mechs & cubes < 10:
+         - Nearest NPC drone within 70m with LOS (drops 2 cubes)
+         - Nearest crate within 60m with LOS (drops 1 cube + 50% weapon)
     """
     me = obs["self"]
     my_x, my_y, my_z = me["pos"]
+    muzzle_h = me.get("stats", {}).get("muzzle_height", C.MECH_MUZZLE_HEIGHT)
 
-    # --- Collect T0 mechs (directly visible) ---
+    # --- 1. Directly visible enemy mechs ---
     t0_mechs = [m for m in obs.get("mechs", []) if m["kind"] == "mech"]
 
-    if not t0_mechs:
-        # Try T1 tracker beliefs
-        t1 = [v for v in tracker_beliefs.values() if v.get("tier") == 1]
-        if not t1:
-            return None
+    if t0_mechs:
+        def target_rank(m):
+            tx, ty, tz = m["pos"]
+            has_los = True
+            if world is not None:
+                has_los = world.has_los_2d(my_x, my_y, my_z + muzzle_h, tx, ty, tz + 4.5)
+            # LOS first (0 = yes, 1 = no), then lowest HP, then distance
+            return (0 if has_los else 1, m.get("hp", 9999), _dist2d(my_x, my_y, tx, ty))
+
+        return min(t0_mechs, key=target_rank)
+
+    # --- 2. T1 tracker beliefs ---
+    t1 = [v for v in tracker_beliefs.values() if v.get("tier") == 1 and v.get("kind") == "mech"]
+    if t1:
         return min(t1, key=lambda b: b.get("hp", 9999))
 
-    # Prefer lowest HP target — finish off weakened enemies
-    target = min(t0_mechs, key=lambda m: (
-        m.get("hp", 9999),
-        _dist2d(my_x, my_y, m["pos"][0], m["pos"][1])
-    ))
-    return target
+    # --- 3. Resource farming (only when under stat cap: cubes < 10) ---
+    if cubes < 10:
+        # Nearest visible NPC drone within 70 m
+        npcs = [m for m in obs.get("mechs", []) if m["kind"] == "npc"]
+        valid_npcs = []
+        for n in npcs:
+            nx, ny, nz = n["pos"]
+            d = _dist2d(my_x, my_y, nx, ny)
+            if d <= 70.0:
+                if world is None or world.has_los_2d(my_x, my_y, my_z + muzzle_h, nx, ny, nz + 1.8):
+                    valid_npcs.append((d, n))
+        if valid_npcs:
+            valid_npcs.sort(key=lambda x: x[0])
+            return valid_npcs[0][1]
+
+        # Nearest visible crate within 60 m
+        crates = obs.get("crates", [])
+        valid_crates = []
+        for c in crates:
+            cx, cy, cz = c["pos"]
+            d = _dist2d(my_x, my_y, cx, cy)
+            if d <= 60.0:
+                if world is None or world.has_los_2d(my_x, my_y, my_z + muzzle_h, cx, cy, cz + 1.0):
+                    valid_crates.append((d, {
+                        "id": -c["id"],
+                        "kind": "crate",
+                        "pos": [cx, cy, cz],
+                        "vel": [0.0, 0.0, 0.0],
+                        "hp": c.get("hp", 300.0),
+                    }))
+        if valid_crates:
+            valid_crates.sort(key=lambda x: x[0])
+            return valid_crates[0][1]
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -330,10 +366,10 @@ def should_take_pickup(obs: dict, pickup: dict) -> bool:
     """
     Decide whether to take a weapon pickup.
     Never drop the Arm Gun (slot 0).
-    Take any weapon if slot 1 is empty, or upgrade (laser > mortar > lightning).
+    Take any weapon if slot 1 is empty, or upgrade (laser > lightning > mortar).
     """
     kind = pickup.get("kind", "")
-    if kind not in ("laser", "mortar", "lightning"):
+    if kind not in ("laser", "lightning", "mortar"):
         return False
 
     weapons = obs["self"].get("weapons", [None, None])
@@ -342,9 +378,10 @@ def should_take_pickup(obs: dict, pickup: dict) -> bool:
         return True
 
     slot1_kind = slot1.get("kind")
-    if slot1_kind == "lightning" and kind in ("laser", "mortar"):
+    # Hierarchy: laser > lightning > mortar
+    if slot1_kind == "mortar" and kind in ("lightning", "laser"):
         return True
-    if slot1_kind == "mortar" and kind == "laser":
+    if slot1_kind == "lightning" and kind == "laser":
         return True
 
     return False
@@ -371,6 +408,7 @@ class CombatController:
     def __init__(self) -> None:
         self._laser = LaserController()
         self._last_aim: List[float] = [0.0, 0.0]
+        self._scan_yaw: float = 0.0
         # Smoothed target velocity (exponential moving average)
         self._vel_alpha    = 0.5    # EMA weight for new observations
         self._smoothed_vel: Dict[int, List[float]] = {}
@@ -406,19 +444,20 @@ class CombatController:
         return math.degrees(math.hypot(dyaw, dpitch))
 
     # ------------------------------------------------------------------
-    def decide(self, obs: dict, tracker_beliefs: dict) -> dict:
+    def decide(self, obs: dict, tracker_beliefs: dict, world=None, state: str = "") -> dict:
         """
         Main entry point called by brain.py each tick.
         Returns a partial action dict (tick will be set by the wrapper).
         """
-        me      = obs["self"]
-        t       = obs["t"]
-        pos     = me["pos"]           # [x, y, z]
-        vel     = me["vel"]
-        weapons = me.get("weapons", [None, None])
-        aim     = me.get("aim", [0.0, 0.0])  # actual slewed torso aim
+        me       = obs["self"]
+        t        = obs["t"]
+        pos      = me["pos"]           # [x, y, z]
+        vel      = me["vel"]
+        cubes    = me.get("cubes", 0)
+        weapons  = me.get("weapons", [None, None])
+        aim      = me.get("aim", [0.0, 0.0])  # actual slewed torso aim
         muzzle_h = me.get("stats", {}).get("muzzle_height", C.MECH_MUZZLE_HEIGHT)
-        mortar_h = me.get("stats", {}).get("height", C.MECH_HEIGHT) + 0.5
+        pickup_radius = obs.get("config", {}).get("loot", {}).get("pickup_radius", 4.0)
 
         action: dict = {}
 
@@ -432,26 +471,42 @@ class CombatController:
             if event.get("type") == "effect" and event.get("effect") == "short":
                 self._laser.notify_shorted(t)
 
-        # ---- Weapon pickup ----
+        # ---- Weapon pickup (with 3D distance check) ----
         for pickup in obs.get("pickups", []):
-            px, py = pickup["pos"][0], pickup["pos"][1]
-            dist   = _dist2d(pos[0], pos[1], px, py)
-            if dist <= 4.0 and should_take_pickup(obs, pickup):
+            px, py, pz = pickup["pos"]
+            dist_xy = _dist2d(pos[0], pos[1], px, py)
+            dist_z  = abs(pos[2] - pz)
+            if dist_xy <= pickup_radius and dist_z <= 4.0 and should_take_pickup(obs, pickup):
                 slot1 = weapons[1] if len(weapons) > 1 else None
-                # Drop old slot-1 weapon first if needed
                 if slot1 is not None:
                     action["drop"] = 1
                 action["take"] = pickup["id"]
-                break   # only pick up one per tick
+                break
 
-        # ---- Select target ----
-        target = select_target(obs, tracker_beliefs)
+        # ---- Select target (including NPC/crate farming) ----
+        target = select_target(obs, tracker_beliefs, world=world, cubes=cubes)
 
+        # ---- Active Torso Scanning when no target ----
         if target is None:
-            # No target — maintain last aim, don't fire
-            action["aim"]  = list(self._last_aim)
+            # Check for recent sounds to snap aim towards
+            recent_sounds = [s for s in obs.get("sounds", []) if s.get("kind") in ("step", "boost", "gun", "laser_charge", "lightning", "mortar")]
+            if recent_sounds:
+                best_sound = min(recent_sounds, key=lambda s: s.get("age", 999.0))
+                scan_yaw = best_sound.get("bearing", self._scan_yaw)
+                # Wrap to [-pi, pi]
+                scan_yaw = (scan_yaw + math.pi) % (2.0 * math.pi) - math.pi
+                action["aim"] = [scan_yaw, 0.0]
+                self._scan_yaw = scan_yaw
+            else:
+                # Continuously sweep yaw at ~1.5 rad/s (+0.15 rad / 0.1s tick) wrapped to [-pi, pi]
+                yaw = (self._scan_yaw + 0.15)
+                self._scan_yaw = (yaw + math.pi) % (2.0 * math.pi) - math.pi
+                action["aim"] = [self._scan_yaw, 0.0]
+
+            self._last_aim = list(action["aim"])
             action["fire"] = [False, False]
-            # Reload if gun is empty and not reloading
+
+            # Auto-reload if empty
             w0 = weapons[0] if weapons else None
             if w0 and w0.get("kind") == "gun":
                 if w0.get("ammo", 1) == 0 and w0.get("reload", 0.0) == 0.0:
@@ -466,13 +521,25 @@ class CombatController:
 
         dist_to_target = _dist2d(pos[0], pos[1], tgt_pos[0], tgt_pos[1])
 
+        # Target center of mass (mech: +4.5m, npc: +1.8m, crate: +1.0m)
+        tgt_h = 4.5
+        if target.get("kind") == "npc":
+            tgt_h = 1.8
+        elif target.get("kind") == "crate":
+            tgt_h = 1.0
+
+        # ---- Check Line of Sight ----
+        has_los = True
+        if world is not None:
+            has_los = world.has_los_2d(pos[0], pos[1], pos[2] + muzzle_h,
+                                       tgt_pos[0], tgt_pos[1], tgt_pos[2] + tgt_h)
+
         # ---- Primary aim: gun quadratic lead ----
         gun_aim = gun_lead_aim(pos, tgt_pos, tgt_vel, muzzle_h)
         if gun_aim is None:
-            # Fallback: direct aim
             dx = tgt_pos[0] - pos[0]
             dy = tgt_pos[1] - pos[1]
-            dz = (tgt_pos[2] + 4.5) - (pos[2] + muzzle_h)
+            dz = (tgt_pos[2] + tgt_h) - (pos[2] + muzzle_h)
             gun_aim = (math.atan2(dy, dx),
                        math.atan2(dz, math.hypot(dx, dy)))
 
@@ -481,7 +548,7 @@ class CombatController:
         action["aim"] = [aim_yaw, aim_pitch]
         self._last_aim = [aim_yaw, aim_pitch]
 
-        # ---- Determine which slot-1 weapon we have ----
+        # ---- Slot 1 weapon analysis ----
         w0 = weapons[0] if len(weapons) > 0 else None
         w1 = weapons[1] if len(weapons) > 1 else None
         w1_kind = w1["kind"] if w1 else None
@@ -493,12 +560,11 @@ class CombatController:
             w0_cooldown = w0.get("cooldown", 0.0)
             w0_reload   = w0.get("reload", 0.0)
 
-            # Only auto-reload if empty
             if w0_ammo == 0 and w0_reload == 0.0:
                 action["reload"] = True
 
-            # Fire whenever target is within range and within front cone!
-            if w0_cooldown <= 0.01 and dist_to_target <= C.GUN_RANGE:
+            # Fire whenever cooldown is up, in range, within 25° cone, AND WE HAVE LOS!
+            if w0_cooldown <= 0.01 and dist_to_target <= C.GUN_RANGE and has_los:
                 err_deg = self._aim_error_deg(aim, aim_yaw, aim_pitch)
                 if err_deg <= 25.0:
                     fire0 = True
@@ -508,46 +574,78 @@ class CombatController:
 
         if w1_kind == "laser":
             target_visible = target.get("id") in [
-                m["id"] for m in obs.get("mechs", []) if m["kind"] == "mech"
+                m["id"] for m in obs.get("mechs", [])
             ]
             err_deg = self._aim_error_deg(aim, aim_yaw, aim_pitch)
-            # Override aim to direct-aim for laser (hitscan, no lead needed)
             dx = tgt_pos[0] - pos[0]
             dy = tgt_pos[1] - pos[1]
-            dz = (tgt_pos[2] + 4.5) - (pos[2] + muzzle_h)
+            dz = (tgt_pos[2] + tgt_h) - (pos[2] + muzzle_h)
             las_yaw   = math.atan2(dy, dx)
-            las_pitch = math.atan2(dz, math.hypot(dx, dy))
-            las_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, las_pitch))
+            las_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, math.atan2(dz, math.hypot(dx, dy))))
             las_err   = self._aim_error_deg(aim, las_yaw, las_pitch)
 
-            hold, cancel = self._laser.step(t, w1, target_visible, las_err)
-            fire1 = hold
-            # Use laser aim (direct, not lead)
+            # Only charge and fire laser if we have direct line of sight!
+            hold, cancel = self._laser.step(t, w1, target_visible and has_los, las_err)
+            fire1 = hold and has_los
             if w1 and w1.get("charge", 0.0) > 0.05:
-                # Already charging — keep the laser aim direction
                 action["aim"] = [las_yaw, las_pitch]
 
-        elif w1_kind == "mortar" and dist_to_target > C.MORTAR_MIN_RANGE:
-            # Mortar: compute arc, prefer high-arc to lob over buildings
+        elif w1_kind == "mortar" and target.get("kind") != "crate":
+            mort_cd = w1.get("cooldown", 0.0)
             tube_pos = [pos[0], pos[1], pos[2]]
-            result   = mortar_pitch(tube_pos, tgt_pos, high_arc=True)
-            if result is not None:
-                (pitch_low, pitch_high), mort_yaw = result
-                mort_pitch = pitch_high   # always try to clear buildings
-                mort_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, mort_pitch))
-                action["aim"] = [mort_yaw, mort_pitch]
-                mort_cd = w1.get("cooldown", 0.0)
-                if mort_cd <= 0.01:
-                    fire1 = True
 
-        elif w1_kind == "lightning":
-            # Lightning: short range (<45 m), only fire if very close
-            if dist_to_target <= C.LIGHTNING_RANGE * 0.9:
+            # Cluster Targeting: When Mortar ready, search for >= 2 tracked enemies within 12 m of each other
+            cluster_aim_pos = None
+            if mort_cd <= 0.05 and tracker_beliefs:
+                tracked_mechs = [
+                    b["pos"] for b in tracker_beliefs.values()
+                    if b.get("tier", 9) <= 1 and b.get("kind") == "mech"
+                ]
+                n_mechs = len(tracked_mechs)
+                for i in range(n_mechs):
+                    for j in range(i + 1, n_mechs):
+                        p1 = tracked_mechs[i]
+                        p2 = tracked_mechs[j]
+                        if _dist2d(p1[0], p1[1], p2[0], p2[1]) <= 12.0:
+                            mid_x = (p1[0] + p2[0]) * 0.5
+                            mid_y = (p1[1] + p2[1]) * 0.5
+                            mid_z = (p1[2] + p2[2]) * 0.5
+                            if _dist2d(pos[0], pos[1], mid_x, mid_y) > C.MORTAR_MIN_RANGE:
+                                cluster_aim_pos = [mid_x, mid_y, mid_z]
+                                break
+                    if cluster_aim_pos is not None:
+                        break
+
+            chosen_mortar_tgt = cluster_aim_pos if cluster_aim_pos is not None else tgt_pos
+            chosen_mortar_dist = _dist2d(pos[0], pos[1], chosen_mortar_tgt[0], chosen_mortar_tgt[1])
+
+            if chosen_mortar_dist > C.MORTAR_MIN_RANGE:
+                result = mortar_pitch(tube_pos, chosen_mortar_tgt, high_arc=True)
+                if result is not None:
+                    (pitch_low, pitch_high), mort_yaw = result
+                    mort_pitch = max(C.MIN_PITCH, min(C.MAX_PITCH, pitch_high))
+
+                    # Fix Mortar Aim Hijack: Only hijack torso aim when mortar is ready to fire
+                    # AND (cluster detected OR target is behind cover OR far away > 45 m)! Otherwise keep Gun lead aim.
+                    if mort_cd <= 0.05 and (cluster_aim_pos is not None or not has_los or dist_to_target > 45.0):
+                        action["aim"] = [mort_yaw, mort_pitch]
+                        if mort_cd <= 0.01:
+                            fire1 = True
+
+        elif w1_kind == "lightning" and target.get("kind") != "crate":
+            if dist_to_target <= C.LIGHTNING_RANGE * 0.9 and has_los:
                 me_energy = me.get("energy", 0.0)
                 if me_energy >= C.LIGHTNING_ENERGY * 2:
                     lt_cd = w1.get("cooldown", 0.0)
                     if lt_cd <= 0.01:
                         fire1 = True
+
+        # ---- Fix DISENGAGE_REGEN Self-Sabotage ----
+        # In DISENGAGE_REGEN, hold fire unless enemy is dangerously close (< 25 m)
+        # to allow the 5.0 s out-of-combat HP regeneration to trigger!
+        if state == "DISENGAGE_REGEN" and dist_to_target > 25.0:
+            fire0 = False
+            fire1 = False
 
         action["fire"] = [fire0, fire1]
         return action

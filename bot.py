@@ -186,7 +186,7 @@ class Bot:
         combat_action: dict = {}
 
         if (t_mid - t_start) < C.SOFT_DEADLINE_S:
-            combat_action = self.combat.decide(obs, tracker_beliefs)
+            combat_action = self.combat.decide(obs, tracker_beliefs, world=self.world, state=state)
         else:
             # Soft deadline exceeded — skip combat computation this tick
             mf.log(f"Bot: soft deadline exceeded at step 4 "
@@ -217,6 +217,7 @@ class Bot:
             enemy_positions = enemy_positions,
             combat_aim   = combat_aim,
             is_on_roof   = is_on_roof,
+            world        = self.world,
         )
 
         # ================================================================
