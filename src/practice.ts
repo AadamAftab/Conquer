@@ -84,6 +84,10 @@ export const PP = {
   ffaOutgun: 70,
   /** apply the laser-carrier cover rule in practice too */
   outgunAll: false,
+  /** econ: turn toward an unseen attacker while the target is not the one hitting us; attackers seen later get the hit bonus */
+  turnToHit: false,
+  /** econ retreat thresholds scale (1 = TTUN values 0.35 / 0.55 / 0.8) */
+  econLoseK: 0.3,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */

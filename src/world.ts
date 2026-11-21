@@ -54,6 +54,8 @@ export class World {
   kills = 0
   mechCount: number
   mode: "unknown" | "practice" | "ffa" = "unknown"
+  /** last time each mech id hit us, even before we ever saw it */
+  hitBy = new Map<number, number>()
   obs!: Observation
 
   constructor(m: GameMap, hello: Hello) {
@@ -95,6 +97,7 @@ export class World {
           this.lastHurtT = t
           this.hurt.push({ t, amount: ev.amount, bearing: ev.bearing, by: ev.by, weapon: ev.weapon, rear: !!ev.rear })
           if (ev.by !== null) {
+            this.hitBy.set(ev.by, t)
             const tr = this.tracks.get(ev.by)
             if (tr) {
               tr.hitUsT = t

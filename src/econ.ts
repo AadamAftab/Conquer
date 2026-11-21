@@ -121,7 +121,8 @@ export class Econ {
       if (e.kind !== "mech") continue
       const age = t - e.seenT
       if (age > 4) continue
-      let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - e.hitUsT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      const hitT = PP.turnToHit ? Math.max(e.hitUsT, w.hitBy.get(e.id) ?? -99) : e.hitUsT
+      let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - hitT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
       if (this.ffa && PP.ffaFocus) sc -= (t - e.hurtByOtherT < 3 ? 40 : 0) + (e.hp / Math.max(1, e.maxHp) < 0.4 ? 30 : 0)
       if (ffaPick) {
         // free-for-all: leave alone whoever is not fighting us, not weak, not busy and not close
@@ -194,7 +195,8 @@ export class Econ {
       const hasLos = m.los(x, y, muzZ, tc[0], tc[1], tc[2])
       const tFrac = T.hp / Math.max(1, T.maxHp)
       const finishing = tFrac < 0.2 && hpFrac > 0.2 && threats <= 2
-      let losing = !finishing && ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55) || (threats >= 3 && hpFrac < 0.8))
+      const lk = this.ffa ? 1 : PP.econLoseK
+      let losing = !finishing && ((hpFrac < 0.35 * lk && tFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55 * lk) || (threats >= 3 && hpFrac < Math.min(0.95, 0.8 * lk)))
       if (this.ffa && PP.ffaRetreat && !finishing && !losing) {
         // two different mechs hitting us: break line of sight first
         const by = new Set<number>()
@@ -392,6 +394,12 @@ export class Econ {
     if (!me.grounded && this.stuckT > 0 && me.energy > 5) boost = true
 
     // ---------- idle aim, laser hold, reload ----------
+    // shot by someone we cannot see while busy with a target that is not shooting us: look at the shooter
+    if (PP.turnToHit && T && t - this.mechHitT < 0.8 && t - Math.max(T.hitUsT, w.hitBy.get(T.id) ?? -99) > 1.5 && !(iLaser >= 0 && (slots[iLaser]!.charge ?? 0) > 0)) {
+      aimYP = [this.mechHitBearing, 0]
+      fire[0] = fire[1] = false
+      mode += "-turn"
+    }
     if (!aimYP) aimYP = this.idleAim(x, y, t, mv)
     if (iLaser >= 0) {
       const L = slots[iLaser]!
