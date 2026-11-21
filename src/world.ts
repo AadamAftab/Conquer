@@ -1,3 +1,4 @@
+import { RP } from "./risk.ts"
 import type { Hello, Observation, WeaponKind } from "../mechfight.ts"
 import type { GameMap } from "./map.ts"
 import type { V2, V3 } from "./geom.ts"
@@ -177,6 +178,7 @@ export class World {
     // practice (house squad, never fight each other) vs free-for-all
     const deadOthers = this.mechCount - obs.alive - this.kills
     // free-for-all shows early deaths we did not cause; practice house bots only die late (zone)
+    if (RP.ffaForce) this.mode = "ffa"
     if (this.mode !== "ffa" && ((deadOthers >= 2 && t < 200) || (deadOthers >= 4 && t < 330))) this.mode = "ffa"
     else if (this.mode === "unknown" && t > 150 && deadOthers === 0) this.mode = "practice"
   }

@@ -36,6 +36,10 @@ export const RP = {
   legacy: false,
   /** play the aggressive practice core in free-for-all too (instead of the ninja core) */
   ffaPractice: false,
+  /** simulator only: treat every match as a free-for-all from the start */
+  ffaForce: false,
+  /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
+  ffaCore: "econ" as "ninja" | "econ",
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

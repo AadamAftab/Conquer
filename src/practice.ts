@@ -65,6 +65,17 @@ export const PP = {
   econAim: "ttun" as "ttun" | "ours",
   /** econ: back off from drones shooting us when badly hurt */
   econDroneBack: false,
+  /** free-for-all (econ core): only engage mechs that fight us, are weak, busy with someone else or close; hide from the rest */
+  ffaPick: true,
+  /** free-for-all (econ core): retreat to cover when two different mechs hit us */
+  ffaRetreat: true,
+  /** free-for-all (econ core): how long hits / other fights keep a mech engageable (s) */
+  ffaMemS: 3,
+  /** free-for-all opening: stay out of every known mech's sight, fight only attackers and close mechs */
+  ffaLurk: false,
+  /** the opening lasts until this time (s) or until this many mechs are left */
+  lurkT: 75,
+  lurkAlive: 9,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

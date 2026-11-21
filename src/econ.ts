@@ -35,6 +35,8 @@ export class Econ {
   threatT = -99
   phase = 0
   spin = 0
+  /** free-for-all engagement rules on (set by the brain) */
+  ffa = false
 
   constructor(h: Host) {
     this.h = h
@@ -112,11 +114,29 @@ export class Econ {
     // ---------- target ----------
     let T: Track | null = null
     let best = Infinity
+    const ffaPick = this.ffa && PP.ffaPick
+    const lurk = this.ffa && PP.ffaLurk && t < PP.lurkT && obs.alive > PP.lurkAlive
+    let avoid: Track | null = null
     for (const e of w.tracks.values()) {
       if (e.kind !== "mech") continue
       const age = t - e.seenT
       if (age > 4) continue
-      const sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - e.hitUsT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - e.hitUsT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      if (ffaPick) {
+        // free-for-all: leave alone whoever is not fighting us, not weak, not busy and not close
+        const d = dTo(e.pos), mem = PP.ffaMemS
+        const hitUs = t - e.hitUsT < mem
+        const weak = e.hp / Math.max(1, e.maxHp) < 0.5
+        const busy = t - e.hurtByOtherT < mem
+        const facing = age < 0.5 && Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) < 0.3
+        const ours = t - e.hitByUsT < mem && e.id === this.targetId
+        const engage = lurk ? t - e.hitUsT < 2 || d < 45 : hitUs || weak || ours || d < 45 || (busy && d < 170) || (facing && d < 120)
+        if (!engage) {
+          if (age < 0.5 && (!avoid || d < dTo(avoid.pos))) avoid = e
+          continue
+        }
+        sc -= (busy ? 40 : 0) + (weak ? 40 : 0)
+      }
       if (sc < best) (best = sc), (T = e)
     }
     if (T) (this.targetId = T.id), (this.targetT = t)
@@ -173,7 +193,13 @@ export class Econ {
       const hasLos = m.los(x, y, muzZ, tc[0], tc[1], tc[2])
       const tFrac = T.hp / Math.max(1, T.maxHp)
       const finishing = tFrac < 0.2 && hpFrac > 0.2 && threats <= 2
-      const losing = !finishing && ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55) || (threats >= 3 && hpFrac < 0.8))
+      let losing = !finishing && ((hpFrac < 0.35 && tFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55) || (threats >= 3 && hpFrac < 0.8))
+      if (this.ffa && PP.ffaRetreat && !finishing && !losing) {
+        // two different mechs hitting us: break line of sight first
+        const by = new Set<number>()
+        for (const hh of w.hurt) if (hh.by !== null && hh.by < 100 && t - hh.t < 3) by.add(hh.by)
+        if (by.size >= 2 && hpFrac < 0.85) losing = true
+      }
       if (losing) this.hideUntil = t + 6
       // aim and fire
       const r = this.fireAt(me, T, tc, d, age, seen, hasLos, iGun, iLaser, iLight, iMortar)
@@ -215,6 +241,33 @@ export class Econ {
       else if (!losing && nearPick && nearPick.eff < (onlyGun ? 60 : 35)) (goal = [nearPick.p[0], nearPick.p[1]]), (mode = "fight-loot")
       if (zoneGoal && outside) (goal = null), (mode = "fight-zone")
     }
+    // free-for-all opening: out of every known mech's sight, quiet when unseen
+    if (lurk && !(zoneGoal && outside)) {
+      const eyes: V3[] = []
+      for (const e of w.tracks.values()) if (e.kind === "mech" && t - e.seenT < 5 && dTo(e.pos) < 230) eyes.push([e.pos[0], e.pos[1], e.pos[2] + 8])
+      const seenBy = eyes.filter((eye) => m.los(eye[0], eye[1], eye[2], x, y, z + 5)).length
+      if (seenBy) {
+        const cv = this.coverMulti(x, y, eyes, 48, t)
+        if (cv) {
+          goal = cv
+          stand = false
+          creep = false
+          mode = T ? "lurk-fight" : "lurk-hide"
+          if (me.energy > 25 && (t - this.mechHitT < 2 || T)) boost = true
+        }
+      } else if (!T && !zoneGoal) {
+        const keep = goal && Math.hypot(goal[0] - x, goal[1] - y) < 25 && mode === "loot"
+        if (!keep) (goal = null), (stand = true), (mode = "lurk")
+      }
+    }
+    // free-for-all: someone we leave alone can see us -> slip out of its sight
+    if (!goal && !stand && !T && avoid && !(zoneGoal && outside)) {
+      const eye: V3 = [avoid.pos[0], avoid.pos[1], avoid.pos[2] + 8]
+      if (m.los(eye[0], eye[1], eye[2], x, y, z + 6)) {
+        const cv = this.coverFrom(x, y, eye, 42)
+        if (cv) (goal = cv), (mode = "avoid")
+      }
+    }
     const heal = !goal && !T && !zoneGoal && !(nearCube && nearCube.d <= 40) && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9))
     if (heal) {
       mode = "heal"
@@ -241,7 +294,7 @@ export class Econ {
           goal = [nc[0] + (x - nc[0]) * k, nc[1] + (y - nc[1]) * k]
         }
         // shoot drones and crates while looting or roaming
-        if (hpFrac > 0.4 && t - this.mechHitT > 1.5) {
+        if (hpFrac > 0.4 && t - this.mechHitT > 1.5 && !lurk) {
           const f = this.farmShot(me, x, y, z, muzZ, iGun, iLight)
           if (f) {
             aimYP = f.aim
@@ -308,6 +361,7 @@ export class Econ {
       if ((G.ammo ?? 0) < (G.stats.mag ?? 12) * 0.5 && !(G.reload ?? 0) && !firedGun) act.reload = true
     }
 
+    if ((globalThis as any).__ECODBG && t < 8) console.log(`DBG t=${t.toFixed(1)} mode=${mode} pos=${x.toFixed(0)},${y.toFixed(0)},${z.toFixed(0)} goal=${goal ? goal.map((v) => v.toFixed(0)).join(",") : "-"} stand=${stand} mv=${mv.map((v) => v.toFixed(2)).join(",")} jump=${jump} boost=${boost} stuckT=${this.stuckT.toFixed(1)} T=${T?.id ?? "-"} grounded=${me.grounded}`)
     act.move = [Math.round(mv[0] * 100) / 100, Math.round(mv[1] * 100) / 100]
     act.boost = boost
     act.jump = jump
@@ -413,6 +467,29 @@ export class Econ {
         const sc = r - 0.3 * (Math.hypot(px - eye[0], py - eye[1]) - d0)
         if (sc < bs) (bs = sc), (best = [px, py])
       }
+    return best
+  }
+
+  private coverCache: { t: number; x: number; y: number; p: V2 | null } = { t: -99, x: 0, y: 0, p: null }
+  /** Nearest walkable spot (rings of 6 m up to maxR) that no eye sees; fewest eyes otherwise. Cached 0.5 s. */
+  private coverMulti(x: number, y: number, eyes: V3[], maxR: number, t: number): V2 | null {
+    const c = this.coverCache
+    if (t - c.t < 0.5 && Math.hypot(c.x - x, c.y - y) < 4) return c.p
+    const m = this.h.m, rq = this.h.nav.rq
+    let best: V2 | null = null
+    let bs = Infinity
+    for (let r = 6; r <= maxR; r += 6)
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2
+        const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r
+        if (!m.passable(m.nodeOf(px, py), rq) || !m.walkLine(x, y, px, py, rq)) continue
+        const gz = m.groundAt(px, py) + 6
+        let n = 0
+        for (const e of eyes) if (m.los(e[0], e[1], e[2], px, py, gz)) n++
+        const sc = r + 60 * n
+        if (sc < bs) (bs = sc), (best = [px, py])
+      }
+    this.coverCache = { t, x, y, p: best }
     return best
   }
 

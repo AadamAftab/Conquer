@@ -23,7 +23,11 @@ const REAL = process.env.SIMMODE === "real"
 const REAL_ERR = Number(process.env.SIMERR ?? 0.02)
 const REAL_OMNI = process.env.SIMOMNI === "1"
 // SIMFFA=1: free-for-all, every house bot fights the nearest mech it sees (like qualifying/final)
-const FFA = process.env.SIMFFA === "1"
+const FFA = process.env.SIMFFA === "1" || !!process.env.SIMBOTS
+// SIMBOTS=econ|practice|mix: the 15 opponents run our own cores (TTUN-like econ, Lance-like practice) in a free-for-all
+const BOTS = process.env.SIMBOTS ?? ""
+// SIMINVIS=s: measurement only, nobody sees us for the first s seconds
+const INVIS = Number(process.env.SIMINVIS ?? 0)
 // SIMMODE=lance: house model of a public 4.75 bot's sim (all 15 hunt within a tier chase radius,
 // tier fire ranges, aim noise per tier x SIMLF, lasers on the 3 experts)
 const LANCE = process.env.SIMMODE === "lance"
@@ -117,6 +121,12 @@ function runMatch(seed: number) {
     mechs.push(m)
   }
   mechs[0].brain = new Brain({ ...HELLO, slot: 0, seed: seed * 7 + 1 })
+  ;(globalThis as any).__ECODBG = false
+  if (BOTS)
+    for (let i = 1; i < 16; i++) {
+      const core = BOTS === "mix" ? (i % 2 ? "econ" : "practice") : (BOTS as "econ" | "practice")
+      mechs[i].brain = new Brain({ ...HELLO, slot: i, seed: seed * 7 + 1 + i * 13 }, { map: MAP, core, noWarm: true })
+    }
   const npcs: Npc[] = []
   for (let k = 0; k < C.npc.count; k++) {
     const p = ground(3)
@@ -173,7 +183,8 @@ function runMatch(seed: number) {
     }
     if (by && by.kind === "mech") {
       ;(by as Mech).lastCombatT = t
-      if (by.id === 0) (st.dealt += amount), (by as Mech).events.push({ type: "hit", target: target.id, amount, weapon })
+      if ((by as Mech).brain) (by as Mech).events.push({ type: "hit", target: target.id, amount, weapon })
+      if (by.id === 0) st.dealt += amount
     }
     if (target.kind === "npc" && by) (target as Npc).target = by.id
     target.hp -= amount
@@ -199,6 +210,7 @@ function runMatch(seed: number) {
     }
   }
   const sees = (a: Mech, b: Ent) => {
+    if (b.id === 0 && a.id !== 0 && tick * DT < INVIS) return false
     const d = Math.hypot(b.pos[0] - a.pos[0], b.pos[1] - a.pos[1])
     if (d > C.vision.range) return false
     if (d > C.vision.near_range && Math.abs(angDiff(Math.atan2(b.pos[1] - a.pos[1], b.pos[0] - a.pos[0]), a.aim[0])) > (C.vision.fov_deg / 2) * D2R) return false
@@ -249,12 +261,16 @@ function runMatch(seed: number) {
         if (m.brain) {
           const obs = buildObs(m, t, Z, live, npcs, crates, pickups, cubes, shots, drops, tick)
           const t0 = performance.now()
+          ;(globalThis as any).__ECODBG = process.env.SIMECODBG === "1" && m.id === 0
           const a = m.brain.act(obs)
+          ;(globalThis as any).__ECODBG = false
           const ms = performance.now() - t0
-          times.push(ms)
-          if (ms > 50) late++
-          stateTicks.set(m.brain.state, (stateTicks.get(m.brain.state) ?? 0) + 1)
-          if (VERBOSE && tick % 40 === 0) console.log(t.toFixed(0), m.brain.state, "hp", m.hp.toFixed(0), "pos", m.pos.map((v) => v.toFixed(0)).join(","), "w", m.weapons.map((w) => w?.kind ?? "-").join("+"), "cubes", m.cubes, "alive", live.length)
+          if (m.id === 0) {
+            times.push(ms)
+            if (ms > 50) late++
+            stateTicks.set(m.brain.state, (stateTicks.get(m.brain.state) ?? 0) + 1)
+          }
+          if (VERBOSE && m.id === 0 && tick % 40 === 0) console.log(t.toFixed(0), m.brain.state, "hp", m.hp.toFixed(0), "pos", m.pos.map((v) => v.toFixed(0)).join(","), "w", m.weapons.map((w) => w?.kind ?? "-").join("+"), "cubes", m.cubes, "alive", live.length)
           draw.clear()
           m.move = (a.move as V2) ?? [0, 0]
           m.boost = !!a.boost
@@ -450,6 +466,8 @@ function runMatch(seed: number) {
     tick++
   }
   const me = mechs[0]
+  if (process.env.SIMDBG === "1")
+    for (const m of mechs) console.log(`  #${m.id} ${m.brain ? (m.brain as any).forceCore || "us" : "house"} alive=${m.alive} death=${m.alive ? "-" : (m.deathTick * DT).toFixed(0)} hp=${m.hp.toFixed(0)} w=${m.weapons.map((w) => w?.kind ?? "-").join("+")} cubes=${m.cubes} upg=${m.upgrades.join(",")} state=${m.brain?.state ?? ""}`)
   const deadBefore = mechs.filter((m) => m.id !== 0 && !m.alive && m.deathTick < me.deathTick).length
   const place = me.alive ? 1 + mechs.filter((m) => m.id !== 0 && m.alive && m.hp > me.hp).length : 16 - deadBefore
   times.sort((a, b) => a - b)
@@ -470,7 +488,7 @@ function runMatch(seed: number) {
       }
       if (C.cubes.upgrade_thresholds.includes(m.cubes)) m.offersPending++
     }
-    if (m.id === 0 && !m.offer && m.offersPending > 0) newOffer(m)
+    if (m.brain && !m.offer && m.offersPending > 0) newOffer(m)
   }
   function newOffer(m: Mech) {
     const ok = C.upgrades.filter((u: any) => (!u.requires || m.weapons.some((w) => w?.kind === u.requires)) && m.upgrades.filter((x) => x === u.id).length < u.max)

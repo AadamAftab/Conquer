@@ -194,6 +194,18 @@ export class Navigator {
     this.pf.state = "idle"
   }
 
+  /** Forget everything, including progress and stuck timers (after a warmup on a fake match). */
+  resetAll() {
+    this.reset()
+    this.idx = 0
+    this.lastPlanT = -99
+    this.lastProgT = 0
+    this.lastProgPos = [0, 0]
+    this.stuckUntil = 0
+    this.stuckSide = 1
+    this.costFn = null
+  }
+
   /**
    * Move direction toward (gx, gy) from (x, y) at time t. Returns null when arrived.
    * `budget` limits A* expansions this decision.

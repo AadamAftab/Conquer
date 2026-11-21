@@ -64,11 +64,15 @@ export class Brain {
   unstickUntil = -1
   unstickSide = 1
 
-  constructor(hello: Hello) {
+  /** core forced regardless of the detected mode (simulator opponents) */
+  forceCore: "" | "econ" | "practice" = ""
+
+  constructor(hello: Hello, opts: { map?: GameMap; core?: "econ" | "practice"; noWarm?: boolean } = {}) {
     const t0 = performance.now()
     this.hello = hello
     const cfg = hello.config
-    this.m = new GameMap(hello.map.dir, cfg.mech.step_up ?? 1.2)
+    this.forceCore = opts.core ?? ""
+    this.m = opts.map ?? new GameMap(hello.map.dir, cfg.mech.step_up ?? 1.2)
     this.w = new World(this.m, hello)
     this.nav = new Navigator(this.m)
     this.rnd = rng((hello.seed ?? 1) ^ 0x5bd1e995)
@@ -76,7 +80,7 @@ export class Brain {
     this.g = cfg.mech.gravity ?? 22
     this.practice = new Practice(this)
     this.econ = new Econ(this)
-    this.warmup()
+    if (!opts.noWarm) this.warmup()
     log(`brain ready in ${(performance.now() - t0).toFixed(0)} ms`)
   }
 
@@ -149,7 +153,8 @@ export class Brain {
     } catch (e) {
       log("practice warmup failed", e)
     }
-    this.nav.reset()
+    // the fake match ran up to t = 3.9 s on our navigator: forget its stuck timers too
+    this.nav.resetAll()
     if (n < 0) log(n)
   }
 
@@ -169,8 +174,10 @@ export class Brain {
     const w = this.w, m = this.m
     w.update(obs)
     // practice (house squad): aggressive core; free-for-all: ninja core below
-    if ((w.mode !== "ffa" || RP.ffaPractice) && !RP.legacy) {
-      const core = PP.core === "econ" ? this.econ : this.practice
+    const ffaEcon = w.mode === "ffa" && RP.ffaCore === "econ" && !this.forceCore
+    if (this.forceCore || ffaEcon || ((w.mode !== "ffa" || RP.ffaPractice) && !RP.legacy)) {
+      const core = ffaEcon || (this.forceCore || PP.core) === "econ" ? this.econ : this.practice
+      this.econ.ffa = ffaEcon
       const a = core.act(obs, T0)
       this.state = core.state
       const ms = performance.now() - T0
