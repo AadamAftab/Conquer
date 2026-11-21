@@ -7,6 +7,23 @@ import { angDiff, clamp, type V2, type V3 } from "./geom.ts"
 
 /** Survival-first upgrade order. */
 const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate", "laser_charge", "gun_damage", "capacitor", "reactor", "gyros", "lightning_range", "gun_mag", "sensors", "gun_velocity", "servos", "jets", "lightning_chain", "laser_pierce"]
+/** Tunables of the practice core (BOTP env var overrides them in local tests). */
+export const PP = {
+  laserRange: 145,
+  gunRange: 85,
+  lightRange: 28,
+  retreatHp: 0.38,
+  retreatExit: 0.8,
+  manyHp: 0.6,
+  manyDps: 110,
+  finishFrac: 0.3,
+  strafe: 0.85,
+  drops: true,
+}
+try {
+  const env = typeof process !== "undefined" ? process.env.BOTP : undefined
+  if (env) Object.assign(PP, JSON.parse(env))
+} catch {}
 const TICK = 0.05
 const SPAN = 0.1
 
@@ -120,11 +137,11 @@ export class Practice {
     const dT = T ? T.d : Infinity
 
     // ---------- flags ----------
-    if (!this.retreating && hpFrac < 0.38 && nThreat > 0) this.retreating = true
-    if (this.retreating && (hpFrac > 0.8 || (t - w.lastHurtT > 12 && hpFrac > 0.6))) this.retreating = false
-    const many = threats.length >= 3 || (threats.length >= 2 && hpFrac < 0.6) || dpsIn > 110 || hiddenBearing !== null
+    if (!this.retreating && hpFrac < PP.retreatHp && nThreat > 0) this.retreating = true
+    if (this.retreating && (hpFrac > PP.retreatExit || (t - w.lastHurtT > 12 && hpFrac > 0.6))) this.retreating = false
+    const many = threats.length >= 3 || (threats.length >= 2 && hpFrac < PP.manyHp) || dpsIn > PP.manyDps || hiddenBearing !== null
     const outranged = !hasLaser && threats.some((s) => s.e.weapons.includes("laser") && s.d > 70)
-    const finishing = shootable && T!.e.hp <= 0.3 * T!.e.maxHp && dT < 130 && hpFrac > 0.3 && threats.length <= 2
+    const finishing = shootable && T!.e.hp <= PP.finishFrac * T!.e.maxHp && dT < 130 && hpFrac > 0.3 && threats.length <= 2
     const closeFight = (shootable && dT < 40 && (hasLight || hpFrac > 0.5)) || finishing
 
     // ---------- zone ----------
@@ -142,7 +159,7 @@ export class Practice {
     const safe = (px: number, py: number) => Math.hypot(px - nc[0], py - nc[1]) <= nr - margin / 2 || (!mustGo && Math.hypot(px - cur.c[0], py - cur.c[1]) <= cur.r - 25)
 
     // ---------- goals ----------
-    const drop = this.dropGoal(obs, x, y, t, seen, hpFrac, walk)
+    const drop = PP.drops ? this.dropGoal(obs, x, y, t, seen, hpFrac, walk) : null
     const cube = this.nearestCube(x, y, z, safe, 70)
     const pick = this.wantedPickup(slots, x, y, z, safe, gunOnly ? 240 : 160)
 
@@ -432,9 +449,9 @@ export class Practice {
   /** Fixed range per weapon, radial correction plus a lateral strafe that flips at random. */
   private fightMove(x: number, y: number, T: Seen, hasLaser: boolean, hasLight: boolean, finishing: boolean, charge: boolean, mustGo: boolean, nc: V2, nr: number, t: number): V2 {
     const d = T.d
-    let pref = hasLaser ? 110 : hasLight ? 28 : 85
-    if (hasLaser && hasLight && d < 60) pref = 28
-    if (finishing) pref = hasLight ? 28 : 55
+    let pref = hasLaser ? PP.laserRange : hasLight ? PP.lightRange : PP.gunRange
+    if (hasLaser && hasLight && d < 60) pref = PP.lightRange
+    if (finishing) pref = hasLight ? PP.lightRange : 55
     if (charge) pref = 22
     const ux = (T.e.pos[0] - x) / Math.max(1, d), uy = (T.e.pos[1] - y) / Math.max(1, d)
     const radial = clamp((d - pref) / 30, -1, 1)
@@ -442,7 +459,7 @@ export class Practice {
       if (this.h.rnd() < 0.7) this.strafeSign = -this.strafeSign
       this.strafeT = t + 1.0 + this.h.rnd() * 1.6
     }
-    const s = this.strafeSign * 0.85
+    const s = this.strafeSign * PP.strafe
     let gx = x + (ux * radial - uy * s) * 20, gy = y + (uy * radial + ux * s) * 20
     if (mustGo && Math.hypot(gx - nc[0], gy - nc[1]) > nr) (gx = nc[0]), (gy = nc[1])
     return this.steerLocal(x, y, [gx - x, gy - y])
