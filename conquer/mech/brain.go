@@ -51,6 +51,7 @@ type Brain struct {
 
 	strafe      float64
 	strafeUntil float64
+	boostLow    bool // tweakBoostHyst: energy fell under 30, no extra boosts until it is back over 60
 
 	retreat   bool
 	coverAt   float64
@@ -891,6 +892,14 @@ func (b *Brain) step(o *Obs, act *Action) {
 	if escJump {
 		act.Jump = true
 	}
+	if tweakBoostHyst && b.pracOn {
+		if me.Energy < 30 {
+			b.boostLow = true
+		} else if me.Energy > 60 {
+			b.boostLow = false
+		}
+	}
+	extraOK := !(tweakBoostHyst && b.boostLow)
 	if b.P.Dodge && mode != "unstuck" && mode != "escape" {
 		if dx, dy, lz := b.dodge(o); dx != 0 || dy != 0 {
 			mx, my = mx*0.4+dx*0.9, my*0.4+dy*0.9
@@ -900,18 +909,23 @@ func (b *Brain) step(o *Obs, act *Action) {
 			if lz && me.Energy > 25 {
 				boost = true
 			}
-			if tweakDodgeBoost && b.pracOn && me.Energy > 25 && me.Grounded {
+			if tweakDodgeBoost && b.pracOn && me.Energy > 25 && me.Grounded && extraOK {
 				boost = true
 			}
 		}
 	}
 	if b.pracOn && me.Grounded && (mx != 0 || my != 0) && mode != "unstuck" && mode != "escape" {
 		charging := laser != nil && laser.Charge > 0
-		if tweakJinkBoost && (mode == "fight" || mode == "cornered") && target != nil && me.Energy > 40 && !charging {
+		lightOK := !tweakBoostHyst || light == nil || me.Energy > 60 // keep energy for lightning shots
+		if tweakJinkBoost && extraOK && lightOK && (mode == "fight" || mode == "cornered") && target != nil && me.Energy > 40 && !charging {
 			// strafe at boost speed in gunfights: harder to lead
 			boost = true
 		}
-		if tweakThreatBoost && me.Energy > 30 && !charging && (target != nil || now-b.lastHurt < 2) {
+		if tweakThreatBoost && extraOK && lightOK && me.Energy > 30 && !charging && (target != nil || now-b.lastHurt < 2) {
+			boost = true
+		}
+		if tweakChargeBoost && extraOK && charging && now-b.lastHurt < 2 && me.Energy > 30 {
+			// under fire while charging: half speed, so boost to keep moving
 			boost = true
 		}
 	}
@@ -1060,7 +1074,11 @@ func (b *Brain) step(o *Obs, act *Action) {
 					if tweakRear > 0 && b.pracOn && b.Cfg.Mech.RearMult > 1 && b.backTo(target, x, y) {
 						dmg *= b.Cfg.Mech.RearMult
 					}
-					if dmg*0.8 >= target.HP && math.Abs(angDiff(hy, me.Aim[0])) < tolY*0.9 && math.Abs(hp-me.Aim[1]) < tolP {
+					lk := 0.8
+					if tweakLethalK > 0 && b.pracOn {
+						lk = tweakLethalK
+					}
+					if dmg*lk >= target.HP && math.Abs(angDiff(hy, me.Aim[0])) < tolY*0.9 && math.Abs(hp-me.Aim[1]) < tolP {
 						aim = [2]float64{hy, hp}
 						act.Fire[i] = false
 						break
@@ -1451,10 +1469,18 @@ func (b *Brain) fightMove(o *Obs, tg *Track, seen []*Track, wantLos float64) (fl
 	bd := hyp(bx, by) + 1e-9
 	ux, uy := bx/bd, by/bd
 	if b.now >= b.strafeUntil {
-		if b.rng.Float64() < 0.6 {
-			b.strafe = -b.strafe
+		if tweakFlipFast && b.pracOn {
+			// reverse the strafe about every 0.5 s
+			if b.rng.Float64() < 0.9 {
+				b.strafe = -b.strafe
+			}
+			b.strafeUntil = b.now + 0.35 + b.rng.Float64()*0.3
+		} else {
+			if b.rng.Float64() < 0.6 {
+				b.strafe = -b.strafe
+			}
+			b.strafeUntil = b.now + 0.3 + b.rng.Float64()*0.7
 		}
-		b.strafeUntil = b.now + 0.3 + b.rng.Float64()*0.7
 	}
 	sx, sy := -uy*b.strafe, ux*b.strafe
 	tc := b.center(tg)
@@ -2177,6 +2203,12 @@ func squadParams(p Params) Params {
 	p.Pursue = 1.01
 
 	p.Finish, p.FinishHP, p.FinishRush, p.Pursue, p.Stick = tw.finish, tw.finishHP, tw.finishRush, tw.pursue, tw.stick
+	if tweakHPw > 0 {
+		p.HPw = tweakHPw
+	}
+	if tweakLowBonus > 0 {
+		p.LowBonus = tweakLowBonus
+	}
 	return p
 }
 
