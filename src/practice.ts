@@ -104,6 +104,8 @@ export const PP = {
   econTgtHpW: 90,
   /** econ: finish a target below this hp fraction (TTUN 0.2) */
   econFinish: 0.2,
+  /** practice: from this time on, stay out of sight and only answer attackers / close mechs (0 = off) */
+  lateEvadeT: 0,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */

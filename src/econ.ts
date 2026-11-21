@@ -114,8 +114,8 @@ export class Econ {
     // ---------- target ----------
     let T: Track | null = null
     let best = Infinity
-    const ffaPick = this.ffa && PP.ffaPick
-    const lurk = this.ffa && PP.ffaLurk && t < PP.lurkT && obs.alive > PP.lurkAlive
+    const ffaPick = (this.ffa && PP.ffaPick) || (!this.ffa && PP.lateEvadeT > 0 && obs.t > PP.lateEvadeT)
+    const lurk = (this.ffa && PP.ffaLurk && t < PP.lurkT && obs.alive > PP.lurkAlive) || (!this.ffa && PP.lateEvadeT > 0 && t > PP.lateEvadeT)
     let avoid: Track | null = null
     for (const e of w.tracks.values()) {
       if (e.kind !== "mech") continue
