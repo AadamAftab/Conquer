@@ -18,6 +18,10 @@ mod strategy;
 mod survive;
 mod tele;
 #[cfg(test)]
+mod lab;
+#[cfg(test)]
+mod lab_tests;
+#[cfg(test)]
 mod tests;
 mod wave;
 
@@ -118,6 +122,8 @@ pub struct Brain {
     pub(crate) cad_axis: V2,
     #[cfg(test)]
     pub(crate) dbg: String,
+    #[cfg(test)]
+    pub(crate) frozen: bool,
 }
 
 impl Brain {
@@ -126,7 +132,7 @@ impl Brain {
     }
 
     pub fn with_params(hello: &proto::Hello, shared: Arc<Shared>, params: Params) -> Brain {
-        let mut rng = Rng::new(hello.seed as u64 ^ ((hello.slot as u64) << 40));
+        let mut rng = Rng::new(hello.seed as u64 ^ ((hello.slot as u64) << 40) ^ (params.salt.max(0.0) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let side = if rng.f64() < 0.5 { -1.0 } else { 1.0 };
         let roof = if params.roof_mode > 0.0 {
             let (mn, ms) = (params.roof_min_nodes.max(1.0) as usize, params.roof_min_setback * 0.5);
@@ -193,6 +199,8 @@ impl Brain {
             cad_axis: [1.0, 0.0],
             #[cfg(test)]
             dbg: String::new(),
+            #[cfg(test)]
+            frozen: false,
         }
     }
 
@@ -270,6 +278,10 @@ impl Brain {
     }
 
     pub(crate) fn spent_ms(&self) -> f64 {
+        #[cfg(test)]
+        if self.frozen {
+            return 0.0;
+        }
         self.t_act.elapsed().as_secs_f64() * 1000.0
     }
 

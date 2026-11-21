@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Params {
+    pub salt: f64,
     pub aimz_on: f64,
     pub aimz_pmin: f64,
     pub aimz_shrink: f64,
@@ -354,6 +355,7 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Self {
         Params {
+            salt: 0.0,
             aimz_on: 0.0,
             aimz_pmin: 0.0,
             aimz_shrink: 0.9,
