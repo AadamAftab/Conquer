@@ -54,6 +54,18 @@ const (
 	tweakThreatBoost = false
 	// tweakMobUp: upgrade order plating, armor, servos, jets, reactor, then the laser order.
 	tweakMobUp = false
+	// tweakFlipFast: reverse the fight strafe about every 0.5 s (original: about every 1.1 s).
+	tweakFlipFast = false
+	// tweakChargeBoost: boost while charging the laser when hit in the last 2 s (energy > 30).
+	tweakChargeBoost = false
+	// tweakBoostHyst: the extra boosts above stop when energy falls under 30 and resume over 60; with lightning held,
+	// the strafe and threat boosts also keep energy over 60 for its shots.
+	tweakBoostHyst = false
+	// Squad targeting (0 = original): tweakHPw weight of foe HP in target choice (0.2), tweakLowBonus bonus for a foe under
+	// 30 % HP (100), tweakLethalK share of the partial-laser damage that must cover the foe's HP to release early (0.8).
+	tweakHPw      = 0.0
+	tweakLowBonus = 0.0
+	tweakLethalK  = 0.0
 )
 
 type tweakSet struct {
