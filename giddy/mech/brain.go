@@ -353,7 +353,7 @@ func (b *Brain) observe(o *Obs) {
 		}
 	}
 
-	if tweakHear {
+	if tweakHear && b.pracOn {
 		b.hear(o)
 	}
 
