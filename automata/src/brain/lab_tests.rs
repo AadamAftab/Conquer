@@ -240,6 +240,80 @@ fn hunt(shared: Arc<Shared>, params: &Params, seed: i64, secs: f64) -> Stats {
     lab.st.clone()
 }
 
+/// A pack of n hunters (medium aim, gun + laser) sets off together from one side.
+fn pack(shared: Arc<Shared>, params: &Params, seed: i64, n: usize, secs: f64) -> Stats {
+    let mut rng = Rng::new(seed as u64 ^ 0xBEE5);
+    let (world, nav) = (&shared.world, &shared.nav);
+    let spot = |rng: &mut Rng, c: V3, lo: f64, hi: f64, a0: f64, da: f64| -> V3 {
+        for _ in 0..4000 {
+            let an = a0 + rng.range(-da, da);
+            let r = rng.range(lo, hi);
+            let q0 = [c[0] + r * an.cos(), c[1] + r * an.sin(), 0.0];
+            let q0 = [q0[0], q0[1], world.terrain_z(q0[0], q0[1])];
+            if (q0[0] - 41.3).hypot(q0[1] + 72.8) > 380.0 {
+                continue;
+            }
+            if let Some(q) = nav.snap(q0) {
+                if dist(q, q0) < 2.0 {
+                    return q;
+                }
+            }
+        }
+        c
+    };
+    let start = spot(&mut rng, [41.3, -72.8, 0.0], 0.0, 200.0, 0.0, std::f64::consts::PI);
+    let mut lab = Lab::new(shared.clone(), params.clone(), seed, start, &[WeaponKind::Gun, WeaponKind::Laser]);
+    lab.mortal = true;
+    lab.foes_mortal = true;
+    lab.warmup = 0.0;
+    lab.zone.radius = 380.0;
+    lab.zone.next_radius = 380.0;
+    let bearing = rng.range(0.0, std::f64::consts::TAU);
+    for k in 0..n {
+        let q = spot(&mut rng, start, 190.0 + 25.0 * k as f64, 230.0 + 25.0 * k as f64, bearing, 0.35);
+        lab.add_foe(q, Script::Hunter { sg: 0.06, sl: 0.1, pref: 70.0 }, true);
+    }
+    lab.run(secs)
+}
+
+#[test]
+fn lab_pack() {
+    if !wants("pack") {
+        return;
+    }
+    let Some(shared) = map_shared() else { return };
+    let runs: i64 = std::env::var("MECH_RUNS").ok().and_then(|s| s.parse().ok()).unwrap_or(30);
+    let n: usize = std::env::var("LAB_PACK").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
+    eprintln!("pack: {runs} runs; {n} hunters (gun + laser) set off together from one side");
+    for (name, p) in sets() {
+        let mut tot = Stats::default();
+        let mut life = 0.0;
+        let mut wins = 0;
+        for seed in 1..=runs {
+            let s = pack(shared.clone(), &p, seed, n, 240.0);
+            life += s.died_at.unwrap_or(240.0);
+            if s.died_at.is_none() {
+                wins += 1;
+            }
+            tot.add(&s);
+        }
+        eprintln!(
+            "{name:14} kills {:4.2} life {:5.1}s alive at end {:2}/{runs} | dealt/taken {:4.2} dealt {:5.0} | their gun {:3.0}% laser {:3.0}% | our laser hit {:3.0}% gun hit {:3.0}% | dist {:4.0} m boost {:2.0}%",
+            tot.kills as f64 / runs as f64,
+            life / runs as f64,
+            wins,
+            tot.dmg_dealt / tot.dmg_taken.max(1.0),
+            tot.dmg_dealt / runs as f64,
+            pct(tot.hits_on_us, tot.shots_at_us),
+            pct(tot.laser_hits_on_us, tot.lasers_at_us),
+            pct(tot.laser_hits, tot.laser_shots),
+            pct(tot.gun_hits, tot.gun_shots),
+            tot.dist_sum / tot.dist_n.max(1) as f64,
+            100.0 * tot.boost_s / tot.secs.max(1.0)
+        );
+    }
+}
+
 fn pct(a: u32, b: u32) -> f64 {
     if b == 0 {
         0.0
