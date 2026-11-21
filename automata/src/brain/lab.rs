@@ -40,6 +40,8 @@ pub(crate) enum Script {
     Ducker { open: V3, hide: V3, out: bool, until: f64 },
     /// Walks to us and shoots with noisy aim (sg, sl: aim noise in radians for gun and laser).
     Hunter { sg: f64, sl: f64, pref: f64 },
+    /// Wanders around a home point, in and out of sight, shooting when it sees us.
+    Walker { home: V3, goal: V3, until: f64 },
 }
 
 pub(crate) struct Foe {
@@ -54,6 +56,7 @@ pub(crate) struct Foe {
     pub seen_until: f64,
     side: f64,
     side_until: f64,
+    path: Option<Arc<Field>>,
 }
 
 struct Shot {
@@ -251,6 +254,7 @@ impl Lab {
             seen_until: -1.0,
             side: 1.0,
             side_until: 0.0,
+            path: None,
         });
         id
     }
@@ -480,7 +484,9 @@ impl Lab {
             Script::Gunner { latency, cadence } => (latency, cadence, 0.0, 0.0),
             Script::Ducker { .. } => (0.05, 0.24, 0.0, 0.0),
             Script::Hunter { sg, sl, .. } => (0.05, 0.24, sg, sl),
+            Script::Walker { .. } => (0.05, 0.24, 0.0, 0.0),
         };
+        let mut boost = false;
         // movement
         let mut mv = [0.0, 0.0];
         match script {
@@ -496,27 +502,53 @@ impl Lab {
                 }
             }
             Script::Hunter { pref, .. } => {
+                if t >= self.foes[i].side_until {
+                    self.foes[i].side = -self.foes[i].side;
+                    self.foes[i].side_until = t + self.rng.range(0.5, 1.4);
+                }
+                let u = unit2(me[0] - fpos[0], me[1] - fpos[1]);
+                let s = self.foes[i].side;
                 if !los || d > pref {
                     let fresh = self.chase.as_ref().map_or(false, |c| t - c.0 < 1.0);
                     if !fresh {
                         self.chase = Some((t, Arc::new(nav.field_limited(&[(me, 0.0)], -1.0, 900.0))));
                     }
                     if let Some((_, f)) = &self.chase {
-                        mv = nav.step(f, fpos).map(|s| s.dir).unwrap_or(unit2(me[0] - fpos[0], me[1] - fpos[1]));
+                        mv = nav.step(f, fpos).map(|s| s.dir).unwrap_or(u);
                     }
+                    if los && d < 210.0 {
+                        // weave while closing in under fire
+                        mv = unit2(mv[0] - 0.8 * u[1] * s, mv[1] + 0.8 * u[0] * s);
+                    }
+                    boost = d > pref + 40.0 && self.foes[i].body.energy > 25.0 && (t * 0.2 + self.foes[i].id as f64 * 0.37).fract() < 0.4;
                 } else {
-                    if t >= self.foes[i].side_until {
-                        self.foes[i].side = -self.foes[i].side;
-                        self.foes[i].side_until = t + self.rng.range(0.5, 1.4);
-                    }
-                    let u = unit2(me[0] - fpos[0], me[1] - fpos[1]);
-                    let s = self.foes[i].side;
                     mv = [-u[1] * s, u[0] * s];
+                }
+            }
+            Script::Walker { home, goal, until } => {
+                if self.foes[i].path.is_none() || dist2(fpos, goal) < 3.0 || t >= until {
+                    let mut g = goal;
+                    for _ in 0..8 {
+                        let an = self.rng.range(0.0, std::f64::consts::TAU);
+                        let r = self.rng.range(15.0, 60.0);
+                        let q0 = [home[0] + r * an.cos(), home[1] + r * an.sin(), home[2]];
+                        if let Some(q) = nav.snap(q0) {
+                            if dist(q, q0) < 3.0 && dist(q, fpos) > 12.0 {
+                                g = q;
+                                break;
+                            }
+                        }
+                    }
+                    self.foes[i].path = Some(Arc::new(nav.field_limited(&[(g, 0.0)], -1.0, 260.0)));
+                    self.foes[i].script = Script::Walker { home, goal: g, until: t + 14.0 };
+                }
+                if let Some(f) = &self.foes[i].path {
+                    mv = nav.step(f, fpos).map(|s| s.dir).unwrap_or([0.0, 0.0]);
                 }
             }
         }
         let charging = self.foes[i].laser.as_ref().map_or(false, |l| l.charge > 0.0);
-        let drive = Drive { mv, boost: false, jump: false, speed_mult: if charging { m.charge_move_mult } else { 1.0 } };
+        let drive = Drive { mv, boost, jump: false, speed_mult: if charging { m.charge_move_mult } else { 1.0 } };
         physics::step(world, &m, &mut self.foes[i].body, &drive, DT);
         // aim with a linear lead on what it saw `latency` ago
         let k = ((latency / DT).round() as usize).min(self.hist.len().saturating_sub(1));

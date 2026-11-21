@@ -147,6 +147,54 @@ fn duck(shared: Arc<Shared>, params: &Params, site: (V3, V3, V3), seed: i64, sec
     lab.run(secs)
 }
 
+/// A laser-armed target that wanders near buildings, in and out of sight.
+fn cross(shared: Arc<Shared>, params: &Params, site: (V3, V3, V3), seed: i64, secs: f64) -> Stats {
+    let (a, b, _) = site;
+    let mut lab = Lab::new(shared, params.clone(), seed, a, &[WeaponKind::Gun, WeaponKind::Laser]);
+    lab.zone.radius = 900.0;
+    lab.zone.next_radius = 900.0;
+    lab.aim = [(b[1] - a[1]).atan2(b[0] - a[0]), 0.0];
+    lab.add_foe(b, Script::Walker { home: b, goal: b, until: 0.0 }, true);
+    lab.run(secs)
+}
+
+fn laser_line(name: &str, tot: &Stats) -> String {
+    let min = tot.secs.max(1.0) / 60.0;
+    format!(
+        "{name:14} laser {:4.1}/min hit {:3.0}% held {:3.0}% partial {:3.0}% blind {:3.0}% charging {:2.0}% | gun hit {:3.0}% | dealt {:5.0}/min taken {:5.0}/min ratio {:4.2} | dist {:4.0} m",
+        tot.laser_shots as f64 / min,
+        pct(tot.laser_hits, tot.laser_shots),
+        pct(tot.laser_held, tot.laser_shots),
+        pct(tot.laser_partial, tot.laser_shots),
+        pct(tot.laser_blind, tot.laser_shots),
+        100.0 * tot.charge_s / tot.secs.max(1.0),
+        pct(tot.gun_hits, tot.gun_shots),
+        tot.dmg_dealt / min,
+        tot.dmg_taken / min,
+        tot.dmg_dealt / tot.dmg_taken.max(1.0),
+        tot.dist_sum / tot.dist_n.max(1) as f64
+    )
+}
+
+#[test]
+fn lab_cross() {
+    if !wants("cross") {
+        return;
+    }
+    let Some(shared) = map_shared() else { return };
+    let sites = duck_sites(&shared, 12, 99);
+    eprintln!("cross: {} sites; our laser against a target wandering in and out of sight", sites.len());
+    for (name, p) in sets() {
+        let mut tot = Stats::default();
+        for (i, s) in sites.iter().enumerate() {
+            for seed in 1..=2 {
+                tot.add(&cross(shared.clone(), &p, *s, seed * 100 + i as i64, 90.0));
+            }
+        }
+        eprintln!("{}", laser_line(&name, &tot));
+    }
+}
+
 /// Hunters walk to us one after the other, more of them as they fall.
 fn hunt(shared: Arc<Shared>, params: &Params, seed: i64, secs: f64) -> Stats {
     let mut rng = Rng::new(seed as u64 ^ 0xA11CE);
@@ -343,6 +391,9 @@ fn lab_golden() {
         let sites = duck_sites(&shared, 3, 77);
         for (i, s) in sites.iter().enumerate() {
             out.push(format!("duck{i} {:016x}", duck(shared.clone(), &base, *s, 5 + i as i64, 40.0).hash));
+        }
+        for (i, s) in sites.iter().enumerate().take(2) {
+            out.push(format!("cross{i} {:016x}", cross(shared.clone(), &base, *s, 9 + i as i64, 60.0).hash));
         }
         for seed in 1..=2 {
             out.push(format!("hunt{seed} {:016x}", hunt(shared.clone(), &base, seed, 90.0).hash));
