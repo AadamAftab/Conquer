@@ -9,7 +9,7 @@ import { angDiff, clamp, type V2, type V3 } from "./geom.ts"
 const UPG = ["plating", "armor", "nanites", "laser_damage", "lightning_efficiency", "gun_rate", "laser_charge", "gun_damage", "capacitor", "reactor", "gyros", "lightning_range", "gun_mag", "sensors", "gun_velocity", "servos", "jets", "lightning_chain", "laser_pierce"]
 /** Tunables of the practice core (BOTP env var overrides them in local tests). */
 export const PP = {
-  laserRange: 110,
+  laserRange: 145,
   gunRange: 85,
   lightRange: 28,
   retreatHp: 0.38,
@@ -54,7 +54,7 @@ export const PP = {
   gunLos: false,
   cubeMemS: 3,
   /** plain linear gun lead (2 iterations, +0.05 s, vertical clamp 6 m) instead of the strafe model */
-  linearLead: false,
+  linearLead: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
