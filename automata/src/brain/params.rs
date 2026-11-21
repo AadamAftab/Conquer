@@ -360,6 +360,16 @@ pub struct Params {
     pub lz_scan_len: f64,
     pub lz_hold_lost: f64,
     pub take_range_ban: f64,
+    // engagement model
+    pub mode_detect: f64,
+    pub thr_model: f64,
+    pub mx_on: f64,
+    pub mx_kappa: f64,
+    pub mx_min: f64,
+    pub mx_max: f64,
+    pub mx_w_back: f64,
+    pub mx_boost: f64,
+    pub hold_hunter: f64,
 }
 
 impl Default for Params {
@@ -742,6 +752,15 @@ impl Default for Params {
             lz_scan_len: 1.6,
             lz_hold_lost: 0.0,
             take_range_ban: 0.0,
+            mode_detect: 0.0,
+            thr_model: 0.0,
+            mx_on: 0.0,
+            mx_kappa: 30.0,
+            mx_min: 30.0,
+            mx_max: 180.0,
+            mx_w_back: 3.0,
+            mx_boost: 0.0,
+            hold_hunter: 0.0,
         }
     }
 }
