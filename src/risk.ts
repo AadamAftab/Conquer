@@ -39,7 +39,7 @@ export const RP = {
   /** simulator only: treat every match as a free-for-all from the start */
   ffaForce: false,
   /** test only: keep the navigator state left by the warmup (the hops of v13 and before) */
-  warmNav: true,
+  warmNav: false,
   /** extra salt for our RNG: the scorer is deterministic, so a new salt gives a new sample of the same strategy */
   salt: 0,
   /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
