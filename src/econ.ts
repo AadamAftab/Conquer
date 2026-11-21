@@ -242,8 +242,8 @@ export class Econ {
         if (T.charging && Math.abs(angDiff(T.aim[0], Math.atan2(y - T.pos[1], x - T.pos[0]))) < 0.25 && me.energy > (lightning ? 45 : 10)) boost = true
       }
       // detours to cubes and weapons, even mid-fight
-      if (nearCube && nearCube.d < (losing ? 12 : hpFrac > 0.5 ? 70 : 40)) (goal = [nearCube.p[0], nearCube.p[1]]), (mode = "fight-cube")
-      else if (!losing && nearPick && nearPick.eff < (onlyGun ? 60 : 35)) (goal = [nearPick.p[0], nearPick.p[1]]), (mode = "fight-loot")
+      if (nearCube && nearCube.d < (losing ? 12 : hpFrac > 0.5 ? 70 : 40) * PP.econDetourCube) (goal = [nearCube.p[0], nearCube.p[1]]), (mode = "fight-cube")
+      else if (!losing && nearPick && nearPick.eff < (onlyGun ? 60 : 35) * PP.econDetourPick) (goal = [nearPick.p[0], nearPick.p[1]]), (mode = "fight-loot")
       if (zoneGoal && outside) (goal = null), (mode = "fight-zone")
     }
     // free-for-all opening: out of every known mech's sight, quiet when unseen
@@ -273,7 +273,7 @@ export class Econ {
         if (cv) (goal = cv), (mode = "avoid")
       }
     }
-    const heal = !goal && !T && !zoneGoal && !(nearCube && nearCube.d <= 40) && (hpFrac < 0.55 || (t < this.hideUntil && hpFrac < 0.9))
+    const heal = !goal && !T && !zoneGoal && !(nearCube && nearCube.d <= 40) && (hpFrac < PP.econHealHp || (t < this.hideUntil && hpFrac < 0.9))
     if (heal) {
       mode = "heal"
       let last: Track | null = null

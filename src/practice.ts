@@ -88,6 +88,11 @@ export const PP = {
   turnToHit: false,
   /** econ retreat thresholds scale (1 = TTUN values 0.35 / 0.55 / 0.8) */
   econLoseK: 0.3,
+  /** econ: heal (no target) below this hp fraction */
+  econHealHp: 0.55,
+  /** econ: scale of the mid-fight detours to cubes / weapons (1 = TTUN distances) */
+  econDetourCube: 1,
+  econDetourPick: 6,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
