@@ -44,7 +44,7 @@ export const PP = {
   /** ignore weapon pickups more than 2 m above the ground */
   groundOnly: false,
   /** cap speed at 4.6 m/s (silent steps) when calm */
-  quiet: true,
+  quiet: false,
   /** go for supply drops from roam when calm (in addition to / instead of the priority mode) */
   dropRoam: false,
 }
