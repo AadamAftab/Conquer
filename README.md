@@ -4,7 +4,16 @@ Bot for the Builders Buildathon "Mech Royale" track (protocol `mechfight/1`), te
 
 ## What runs
 
-The submitted image (`Dockerfile`) runs the Go bot in `giddy/`: it is
+The submitted image (`Dockerfile`) runs `automata/`, our Rust bot (MIT License, see `automata/LICENSE`).
+Its tunable parameters are in `automata/bot.json` (read through `MECH_PARAMS`).
+
+```sh
+docker build -t my-bot .
+```
+
+## Go bot (giddy)
+
+`Dockerfile.giddy` builds the Go bot in `giddy/`: it is
 [giddygiddyboy-mech-royale](https://github.com/justnau/giddygiddyboy-mech-royale) by giddygiddyboy,
 used under the MIT License (see `giddy/LICENSE`), taken at commit `70c8b23`. Our changes to it:
 the bot name, an RNG seed salt (`giddy/mech/salt.go`), and optional tweaks behind constants in
@@ -13,7 +22,7 @@ free-for-all detection, mobility boosts, squad targeting weights, end-game zone 
 every tweak is off, so the brain plays as `70c8b23`; experiment commits turn some of them on.
 
 ```sh
-docker build -t my-bot .
+docker build -f Dockerfile.giddy -t my-giddy-bot .
 ```
 
 ## Our own bot
