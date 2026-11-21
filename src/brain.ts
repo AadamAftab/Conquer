@@ -5,7 +5,8 @@ import { World, type Track } from "./world.ts"
 import { aimAt, centerOffset, clampPitch, hitProb, hitRadius, leadAim, missDist, predict2, shellLanding, type Aim } from "./combat.ts"
 import { planPeek, Viewshed, type PeekPlan } from "./cover.ts"
 import { assess, RP, type Risk } from "./risk.ts"
-import { Practice } from "./practice.ts"
+import { Practice, PP } from "./practice.ts"
+import { Econ } from "./econ.ts"
 import { angDiff, rng, type V2, type V3 } from "./geom.ts"
 
 const UPG_FFA = ["gyros", "plating", "armor", "nanites", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "sensors", "gyros", "gun_rate", "servos", "jets", "lightning_range", "reactor", "capacitor", "gun_mag", "gun_velocity", "lightning_chain", "laser_pierce"]
@@ -54,6 +55,7 @@ export class Brain {
   hasLightning = false
   meObs: SelfObs | null = null
   practice: Practice
+  econ: Econ
   cover: V2 | null = null
   coverT = -99
   risk: Risk | null = null
@@ -73,6 +75,7 @@ export class Brain {
     this.perCube = Number(cfg.cubes.size_per_cube ?? 0.05)
     this.g = cfg.mech.gravity ?? 22
     this.practice = new Practice(this)
+    this.econ = new Econ(this)
     this.warmup()
     log(`brain ready in ${(performance.now() - t0).toFixed(0)} ms`)
   }
@@ -125,6 +128,7 @@ export class Brain {
         const x = m.nodeX(s0), y = m.nodeY(s0), zz = m.surfAt(x, y)
         const tw = new World(m, this.hello)
         const tp = new Practice({ m, w: tw, nav: this.nav, hello: this.hello, rnd: rng(3), perCube: this.perCube, g: this.g })
+        const te = new Econ({ m, w: tw, nav: this.nav, hello: this.hello, rnd: rng(4), perCube: this.perCube, g: this.g })
         const obs: any = {
           type: "obs", tick: 0, t: 0, alive: 16, offer: null, drops: [], beams: [], sounds: [], events: [], projectiles: [], crates: [], cubes: [], pickups: [],
           self: { ...fakeMe, id: 0, pos: [x, y, zz], vel: [0, 0, 0], max_energy: 100, grounded: true, upgrades: [], in_zone: true },
@@ -138,6 +142,7 @@ export class Brain {
           obs.self.hp = k < 20 ? 1400 : 400
           tw.update(obs)
           tp.act(obs, performance.now())
+          te.act(obs, performance.now())
         }
         draw.clear()
       }
@@ -165,8 +170,9 @@ export class Brain {
     w.update(obs)
     // practice (house squad): aggressive core; free-for-all: ninja core below
     if ((w.mode !== "ffa" || RP.ffaPractice) && !RP.legacy) {
-      const a = this.practice.act(obs, T0)
-      this.state = this.practice.state
+      const core = PP.core === "econ" ? this.econ : this.practice
+      const a = core.act(obs, T0)
+      this.state = core.state
       const ms = performance.now() - T0
       if (ms > 25) this.slowTicks++
       if (ms > 12) log(`slow act ${ms.toFixed(1)} ms at t=${obs.t} state=${this.state}`)
