@@ -123,6 +123,7 @@ export class Econ {
       if (age > 4) continue
       const hitT = PP.turnToHit ? Math.max(e.hitUsT, w.hitBy.get(e.id) ?? -99) : e.hitUsT
       let sc = dTo(e.pos) + (e.hp / 1400) * 90 + age * 30 - (t - hitT < 3 ? 50 : 0) - (e.id === this.targetId && t - this.targetT < 2 ? 40 : 0)
+      if (PP.econTgtLaser && !this.ffa && e.weapons.includes("laser")) sc += PP.econTgtLaser
       if (this.ffa && PP.ffaFocus) sc -= (t - e.hurtByOtherT < 3 ? 40 : 0) + (e.hp / Math.max(1, e.maxHp) < 0.4 ? 30 : 0)
       if (ffaPick) {
         // free-for-all: leave alone whoever is not fighting us, not weak, not busy and not close
@@ -584,7 +585,7 @@ export class Econ {
     for (const p of w.pickups.values()) {
       if (t - p.seenT > 60 || Math.abs(p.pos[2] - m.groundAt(p.pos[0], p.pos[1])) > 2 || !this.wants(p.kind, slots).ok) continue
       const d = Math.hypot(p.pos[0] - x, p.pos[1] - y)
-      consider([p.pos[0], p.pos[1]], d - (PREF[p.kind] ?? 0) * 20 - (onlyGun ? 50 : 0), false)
+      consider([p.pos[0], p.pos[1]], d - ((PREF[p.kind] ?? 0) * 20 + (onlyGun ? 50 : 0)) * PP.econLootW, false)
     }
     if (nearCube) consider([nearCube.p[0], nearCube.p[1]], nearCube.d - 30, false)
     const zo = obs.zone
@@ -604,7 +605,7 @@ export class Econ {
       for (const c of w.crates.values()) {
         if (Math.abs(c.pos[2] - m.groundAt(c.pos[0], c.pos[1])) > 2) continue
         const d = Math.hypot(c.pos[0] - x, c.pos[1] - y)
-        if (d < 150) consider([c.pos[0], c.pos[1]], d + 5, d <= 30)
+        if (d < PP.econCrateR) consider([c.pos[0], c.pos[1]], d + 5 - PP.econCrateBonus, d <= 30)
       }
     return best
   }

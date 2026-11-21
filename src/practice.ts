@@ -93,6 +93,13 @@ export const PP = {
   /** econ: scale of the mid-fight detours to cubes / weapons (1 = TTUN distances) */
   econDetourCube: 1,
   econDetourPick: 6,
+  /** econ: weight of the weapon bonus in the out-of-fight loot choice (1 = TTUN) */
+  econLootW: 1,
+  /** econ: crates (half drop a weapon) - bonus in the loot choice and reach (TTUN: 0 and 150 m) */
+  econCrateBonus: 0,
+  econCrateR: 150,
+  /** econ: target score penalty for laser carriers (positive = prefer others) */
+  econTgtLaser: -200,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
