@@ -187,8 +187,8 @@ BAND_MORTAR: tuple    = (70.0, 170.0)
 BAND_LIGHTNING: tuple = (10.0, 28.0)
 BAND_NPC: tuple       = (20.0, 45.0)
 LIGHTNING_KEEPOUT_M: float = 55.0  # stay out of an enemy's lightning when we don't hold one
-STRAFE_FLIP_MIN_S: float   = 0.35  # strafe direction flips on a random timer in [min, max]
-STRAFE_FLIP_MAX_S: float   = 0.60
+STRAFE_FLIP_MIN_S: float   = 0.70  # strafe direction flips on a random timer in [min, max]
+STRAFE_FLIP_MAX_S: float   = 1.40
 STRAFE_WEIGHT: float       = 1.0
 RADIAL_WEIGHT: float       = 0.8
 FAR_APPROACH_M: float      = 40.0  # beyond band max + this, path-find toward the target
@@ -200,11 +200,11 @@ BULLET_DANGER_M: float     = 1.5   # extra miss margin around our body for bulle
 SPLASH_DANGER_M: float     = 3.0   # extra margin around mortar splash radius
 PEEK_ON_RELOAD: bool       = True  # break LOS while the gun reloads
 
-# ---- Optional architectures (all active for submission) ----
-USE_CONTEXT_STEER: bool    = True   # steer.py: interest/danger maps instead of vector blending
-USE_LEAD_LEARNER: bool     = True   # combat.py: learn the best lead multiplier from virtual bullets
-USE_INFLUENCE_COVER: bool  = True   # influence.py: grid cover queries instead of the MRM ring
-USE_UTILITY_BRAIN: bool    = True   # utility.py: continuous behaviour scores instead of the FSM
+# ---- Optional architectures (clean baseline: OFF until isolated testing) ----
+USE_CONTEXT_STEER: bool    = False  # steer.py: interest/danger maps instead of vector blending
+USE_LEAD_LEARNER: bool     = False  # combat.py: learn the best lead multiplier from virtual bullets
+USE_INFLUENCE_COVER: bool  = False  # influence.py: grid cover queries instead of the MRM ring
+USE_UTILITY_BRAIN: bool    = False  # utility.py: continuous behaviour scores instead of the FSM
 ISOLATE_MIN_ENEMIES: int   = 2      # influence "isolate" corner query when this many enemies are known
 ISOLATE_REFRESH_S: float   = 0.6    # ...recomputed this often (line-of-sight checks are not free)
 ISOLATE_WEIGHT: float      = 1.0    # ...and pulled toward with this weight
@@ -227,7 +227,7 @@ DROP_RANGE: float       = 220.0   # go for supply drops within this distance
 DROP_ENEMY_CLEAR_M: float = 40.0  # skip a drop with an enemy mech this close to it
 
 # Fire control
-GUN_EXTRA_TOL_DEG: float   = 1.0   # aim slack on top of target size for the gun
+GUN_EXTRA_TOL_DEG: float   = 3.5   # aim slack on top of target size for the gun
 LASER_EXTRA_TOL_DEG: float = 1.5   # aim slack on top of target size for the laser
 REGEN_QUIET_S: float       = 1.5   # in DISENGAGE, hold fire only after this long unhurt
 
@@ -275,7 +275,7 @@ OPENING_CALM_S: float      = 0.0   # 0 = no calm: the active bots in practice fi
 LATE_GAME_ALIVE: int       = 6
 
 # RECOVER (hide and heal between waves)
-RECOVER_START_FRAC: float  = 0.45  # nobody in sight and below this → hide and heal
+RECOVER_START_FRAC: float  = 0.0   # 0.0 = fight on; only recover post-kill or when disengage explicitly triggered
 RECOVER_DONE_FRAC: float   = 0.75  # heal to this before looting / roaming again
 POST_KILL_WINDOW_S: float  = 4.0   # right after a kill...
 POST_KILL_HP_FRAC: float   = 0.75  # ...recover if below this (kept small: idling costs kills)

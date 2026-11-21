@@ -78,7 +78,7 @@ def bullet_danger(danger: List[float], pos, vel, center_z: float, half_h: float,
         cands.append((tca, bx, by, bz, vx, vy, vz))
     cands.sort()
     reach = radius + C.STEER_BULLET_MARGIN_M
-    for tca, bx, by, bz, vx, vy, vz in cands[:8]:
+    for tca, bx, by, bz, vx, vy, vz in cands[:4]:
         # For each slot find WHEN the bullet reaches where we would be (a fixed point: we move
         # slowly compared with a 252 m/s bullet, so three iterations converge), then measure the
         # miss distance at that moment. Running along the bullet's line therefore does not

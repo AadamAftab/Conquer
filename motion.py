@@ -207,18 +207,20 @@ class MotionController:
         calm_hide = calm and not retreating and any(
             math.hypot(e["pos"][0] - sx, e["pos"][1] - sy) <= C.CALM_AVOID_M for e in enemies)
         if retreating or calm_hide:
-            d = R.compute_mrm(
-                pos=pos, enemy_positions=[e["pos"] for e in enemies],
-                zone_cx=zone_cx, zone_cy=zone_cy, zone_r=zone_r,
-                next_zone_cx=next_cx, next_zone_cy=next_cy, next_zone_r=next_r,
-                is_on_roof=is_on_roof, rooftop_goal=None, prev_dir=self._prev_dir,
-                world=world, state=state if retreating else "EVADE",
-                time_budget_s=self._mrm_budget,
-            )
+            d = None
             if C.USE_INFLUENCE_COVER and self.influence is not None and enemies:
                 cell = self.influence.best_cell(pos, enemies, zone, mode="hide")
-                if cell is not None:                       # a cell nobody can see beats the ring heuristic
+                if cell is not None:
                     d = self._nav_dir(pos, cell, t, nav_budget_s)
+            if d is None:
+                d = R.compute_mrm(
+                    pos=pos, enemy_positions=[e["pos"] for e in enemies],
+                    zone_cx=zone_cx, zone_cy=zone_cy, zone_r=zone_r,
+                    next_zone_cx=next_cx, next_zone_cy=next_cy, next_zone_r=next_r,
+                    is_on_roof=is_on_roof, rooftop_goal=None, prev_dir=self._prev_dir,
+                    world=world, state=state if retreating else "EVADE",
+                    time_budget_s=self._mrm_budget,
+                )
             if calm_hide:
                 boost = urgent and energy > C.DODGE_BOOST_ENERGY      # quiet: boost is audible at 90 m
                 mode = "calm-hide"
@@ -429,8 +431,9 @@ class MotionController:
                 energy > C.STRAFE_BOOST_ENERGY
                 or (urgent and energy > C.DODGE_BOOST_ENERGY)
                 or (radial < -0.5 and energy > 30.0))
-            # steering already weighed walls, bullets and the zone: no second blend or wall bend
-            return self._finish(d, boost, False, None, pos, dodge=None, mode="steer")
+            # steering already weighed walls, bullets and the zone: keep flip_on_block for wall bounce
+            return self._finish(d, boost, False, world, pos, dodge=None, mode="steer",
+                                flip_on_block=True)
 
         mx = C.RADIAL_WEIGHT * radial * ux + C.STRAFE_WEIGHT * tx
         my = C.RADIAL_WEIGHT * radial * uy + C.STRAFE_WEIGHT * ty
