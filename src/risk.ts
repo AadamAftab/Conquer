@@ -24,6 +24,12 @@ export const RP = {
   laserNeed: 0.8,
   /** refuse long laser duels when we hold lightning */
   doctrine: true,
+  /** endgame: from this time on, no opportunistic fights or looting */
+  lateT: 330,
+  /** next-circle radius from which we move to the final area right away */
+  lateRadius: 70,
+  /** after a kill, heal up to this fraction before taking the next fight */
+  healAfterKill: 0.9,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

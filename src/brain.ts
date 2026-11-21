@@ -153,7 +153,7 @@ export class Brain {
     if (obs.events.some((ev) => ev.type === "kill")) this.lastKillT = t
     // a nearly dead target is worth finishing before breaking off
     const finishing = T !== null && engage && T.hp / Math.max(1, T.maxHp) < 0.2 && T.hp < me.hp * 0.5
-    if (!this.regen && !finishing && ((hpFrac < lowHp && (hitRecently || nearestD < 120)) || (justKilled && hpFrac < 0.75))) this.regen = true
+    if (!this.regen && !finishing && ((hpFrac < lowHp && (hitRecently || nearestD < 120)) || (justKilled && hpFrac < RP.healAfterKill))) this.regen = true
     if (this.regen && (hpFrac > 0.9 || (t - w.lastHurtT > 10 && hpFrac > 0.75 && nearestD > 140))) this.regen = false
     // risk: never stay in a losing trade or under several guns
     const cfg = this.hello.config
@@ -241,7 +241,7 @@ export class Brain {
         gunOk = regenBlocked
         lightOk = true
         laserMode = iLaser >= 0 ? (this.plan?.hiddenNow ? "charge" : regenBlocked ? "shoot" : "off") : "off"
-      } else if (d < brawlD && (risk.adv > RP.brawlAdv || finishing)) {
+      } else if (d < brawlD && (risk.adv > RP.brawlAdv * (t > RP.lateT ? 1.4 : 1) || finishing)) {
         this.state = "brawl"
         mv = this.brawlMove(x, y, T, iLight >= 0 && me.energy > 25, rq, t)
         gunOk = true
@@ -267,7 +267,8 @@ export class Brain {
         } else {
           // stepping out must be a trade we win
           const pk = assess(m, w, me, P.peek[0], P.peek[1], T, cfg, this.perCube)
-          const okOut = finishing || (pk.ttd > RP.outTtd && pk.adv > RP.outAdv)
+          const lateF = t > RP.lateT ? 1.6 : t > 250 ? 1.25 : 1
+          const okOut = finishing || (pk.ttd > RP.outTtd && pk.adv > RP.outAdv * lateF)
           const r = this.peekStep(obs, x, y, T, P, iGun, iLaser, me.hp, t, okOut)
           this.state = "peek-" + this.peekPhase
           const dest = r.dest
@@ -431,6 +432,8 @@ export class Brain {
     if (d < 35) return true
     if (this.aimedAtUs(e, x, y, 0.2) && d < 160 && t - e.seenT < 0.5) return true
     if (e.charging && this.aimedAtUs(e, x, y, 0.15) && d < 290) return true
+    // late game: only fight what is fighting us (surviving into the collapse is worth more)
+    if (t > RP.lateT) return false
     // easy prey (a kill is a placement point)
     if (e.hp / Math.max(1, e.maxHp) < 0.35 && d < 130) return true
     if (this.w.mode === "ffa" && Math.abs(angDiff(e.aim[0], Math.atan2(y - e.pos[1], x - e.pos[0]))) > 2.2 && d < 90) return true
@@ -633,8 +636,11 @@ export class Brain {
     const z = obs.zone
     const R = z.next_radius
     const d = Math.hypot(x - z.next_center[0], y - z.next_center[1])
-    const inner = R < 45 ? R * 0.5 : R * 0.75
+    const late = R <= RP.lateRadius
+    const inner = R <= 0 ? 4 : R <= 25 ? R * 0.4 : late || R < 45 ? R * 0.5 : R * 0.75
     if (d <= inner) return false
+    // endgame: be on the final circle early, every meter from the last point costs zone damage
+    if (late) return true
     const travel = (d - inner) / 10 + 12
     return t > z.shrink_start - travel - 10
   }
@@ -646,7 +652,7 @@ export class Brain {
     if (this.holdKey === key && this.holdGoal) return this.holdGoal
     const [cx, cy] = z.next_center
     const R = z.next_radius
-    const want = R < 45 ? R * 0.3 : R * 0.55
+    const want = R <= 0 ? 0 : R <= 25 ? R * 0.2 : R <= RP.lateRadius ? R * 0.35 : R < 45 ? R * 0.3 : R * 0.55
     const d = Math.hypot(x - cx, y - cy)
     let gx = x, gy = y
     if (d > want) {
@@ -660,7 +666,7 @@ export class Brain {
     const n = m.snap(gx, gy, rq, myComp, 60)
     if (n >= 0) (gx = m.nodeX(n)), (gy = m.nodeY(n))
     // prefer a spot hugging a wall nearby (fewer angles to be shot from)
-    if (R >= 45) {
+    if (R >= 45 && R > RP.lateRadius) {
       let bs = Infinity
       let bx = gx, by = gy
       for (let k = 0; k < 24; k++) {
@@ -708,9 +714,10 @@ export class Brain {
     const w = this.w, m = this.m
     let best: Goal | null = null
     let bs = Infinity
+    const late = t > RP.lateT
     const consider = (pos: V2, kind: Goal["kind"], id: number, weight: number, maxD: number) => {
       const d = Math.hypot(pos[0] - x, pos[1] - y)
-      if (d > maxD) return
+      if (d > (late ? Math.min(maxD, 15) : maxD)) return
       if (w.zoneMargin(pos[0], pos[1], t + d / 10 + 8) < 6) return
       const sc = d * weight
       if (sc < bs) (bs = sc), (best = { pos, kind, id })
@@ -727,7 +734,7 @@ export class Brain {
       consider([c.pos[0], c.pos[1]], "cube", c.id, 0.45, nearestD > 60 ? 120 : 40)
     }
     // farm drones and crates for cubes (and crate weapons) while it is calm
-    if (nearestD > 140 && hpFrac > 0.5 && t < 380 && w.recentDamage(5) === 0) {
+    if (nearestD > 140 && hpFrac > 0.5 && !late && w.recentDamage(5) === 0) {
       for (const n of w.liveNpcs()) consider([n.pos[0], n.pos[1]], "farm", n.id, 1.1, 130)
       for (const c of w.crates.values())
         if (Math.abs(c.pos[2] - m.groundAt(c.pos[0], c.pos[1])) < 3) consider([c.pos[0], c.pos[1]], "farm", c.id, armed ? 1.3 : 0.9, 110)

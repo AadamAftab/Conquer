@@ -17,6 +17,11 @@ const KIT = process.argv[5] ?? "../mechfight-kit"
 const VERBOSE = process.env.SIMV === "1"
 // house strength 0..1 (aim error, laser share); calibrated so that v1 scores like the real board
 const HARD = Number(process.env.SIMHARD ?? -0.5)
+// SIMMODE=real: house bots modelled on the recorded hunter (laser snipers, precise aim) that must
+// find us through squad vision; SIMERR adds aim error (rad), SIMOMNI=1 makes hunters omniscient
+const REAL = process.env.SIMMODE === "real"
+const REAL_ERR = Number(process.env.SIMERR ?? 0.02)
+const REAL_OMNI = process.env.SIMOMNI === "1"
 const lines = gunzipSync(readFileSync(KIT + "/check/stream.jsonl.gz")).toString("utf8").trim().split("\n")
 const HELLO = JSON.parse(lines[0])
 HELLO.map.dir = KIT + "/arena"
@@ -95,7 +100,9 @@ function runMatch(seed: number) {
       offer: null, offersPending: 0, upgrades: [], stats: { ...C.mech }, hitByUsT: -99, flipT: 0, side: 1,
     }
     m.cmdAim = [...m.aim] as V2
-    if (i > 0 && R() < (0.2 + skill * 0.6) * (0.4 + HARD)) m.weapons[1] = mkWeapon(R() < 0.4 + 0.4 * HARD ? "laser" : "lightning")
+    if (REAL) {
+      if (i > 0 && R() < 0.5 + skill * 0.5) m.weapons[1] = mkWeapon(R() < 0.75 ? "laser" : "lightning")
+    } else if (i > 0 && R() < (0.2 + skill * 0.6) * (0.4 + HARD)) m.weapons[1] = mkWeapon(R() < 0.4 + 0.4 * HARD ? "laser" : "lightning")
     mechs.push(m)
   }
   mechs[0].brain = new Brain({ ...HELLO, slot: 0, seed: seed * 7 + 1 })
@@ -245,7 +252,7 @@ function runMatch(seed: number) {
           m.fire = (a.fire as [boolean, boolean]) ?? [false, false]
           if (a.pick !== undefined && m.offer) applyUpgrade(m, m.offer.choices[a.pick]?.id)
           if (a.take !== undefined) take(m, a.take, a.drop)
-        } else houseAct(m, t, Z, me, OMNI || m.hunter ? { t, pos: me.pos } : squadSeen, R)
+        } else houseAct(m, t, Z, me, OMNI || (m.hunter && (!REAL || REAL_OMNI)) ? { t, pos: me.pos } : squadSeen, R)
       }
       for (const n of npcs) if (n.alive) npcAct(n, t)
     }
@@ -546,20 +553,20 @@ function houseAct(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, us: Mech, in
     if (blocked(m.pos[0] + m.move[0] * 4, m.pos[1] + m.move[1] * 4, m.pos[2])) m.move = [Math.cos(b) * radial, Math.sin(b) * radial]
     const w1 = m.weapons[1]
     const laser = w1?.kind === "laser" ? w1 : null
-    const err = (1 - m.skill) * 0.03 + (1 - HARD) * 0.05
+    const err = REAL ? REAL_ERR * (1.6 - m.skill) : (1 - m.skill) * 0.03 + (1 - HARD) * 0.05
     if (laser && laser.cooldown <= 0.05) {
       // hitscan: aim at the body, charge fully, release when on target
       m.cmdAim = [b + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
       const onTarget = Math.abs(angDiff(b, m.aim[0])) < 0.02 + err
       // slower trigger discipline for weaker squads: wait a little longer before releasing
-      const hold = laser.stats.charge * (1 + Math.max(0, -HARD) * 0.8)
+      const hold = REAL ? laser.stats.charge : laser.stats.charge * (1 + Math.max(0, -HARD) * 0.8)
       m.fire = [false, !((laser.charge ?? 0) >= Math.min(hold, laser.stats.charge + laser.stats.hold_s - 0.2) && onTarget)]
     } else {
       const tl = d / 252 + 0.05
       const px = us.pos[0] + us.vel[0] * tl * (0.4 + 0.6 * m.skill), py = us.pos[1] + us.vel[1] * tl * (0.4 + 0.6 * m.skill)
       m.cmdAim = [Math.atan2(py - m.pos[1], px - m.pos[0]) + gauss(R) * err, Math.atan2(us.pos[2] + 4.5 - m.pos[2] - 7, d)]
       const onTarget = Math.abs(angDiff(m.cmdAim[0], m.aim[0])) < 0.05
-      const fireP = Math.min(1, Math.max(0.2, 0.8 + 0.4 * HARD))
+      const fireP = REAL ? 0.9 : Math.min(1, Math.max(0.2, 0.8 + 0.4 * HARD))
       m.fire = [onTarget && R() < fireP, w1?.kind === "lightning" && d < 40 && onTarget]
     }
     return
