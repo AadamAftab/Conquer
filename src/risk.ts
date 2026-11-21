@@ -41,10 +41,10 @@ export const RP = {
   /** test only: keep the navigator state left by the warmup (the hops of v13 and before) */
   warmNav: false,
   /** extra salt for our RNG: the scorer is deterministic, so a new salt gives a new sample of the same strategy */
-  salt: 1,
+  salt: 0,
   /** opening move for the first openT seconds (see Navigator.openMode); "none" = plain start */
   openMode: "hop" as "none" | "hop" | "side" | "jet" | "boost",
-  openT: 6,
+  openT: 4,
   /** stop the opening move as soon as a mech hits us */
   openCancel: false,
   /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
