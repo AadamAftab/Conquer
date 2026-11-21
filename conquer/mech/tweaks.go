@@ -79,7 +79,7 @@ const (
 	// 25/(25-L) s earlier outside (L = distance the centre still moves), i.e. several hundred HP, and survivors are
 	// then ranked by the order the zone kills them. It holds only in matches confirmed as practice (squad mode on
 	// after 60 s; in free-for-all a death we did not cause always ends squad mode before about 37 s).
-	tweakFinalHold = false
+	tweakFinalHold = true
 	// tweakLeadK: squad mode only, gun lead on mechs. A gun shot leaves on the first tick after the decision when
 	// the cooldown is at most one tick (else on the second) and covers its first 3 m at once, so the bullet reaches
 	// a target d m away (d-3)/speed s after leaving (original: always 0.075 s more). Fighting house bots
