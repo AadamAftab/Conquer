@@ -6,7 +6,7 @@ const (
 	// It acts before the bot can tell practice from free-for-all, so it changes free-for-all too.
 	tweakHopT = 0.0
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
-	tweakLoseK = 0.3
+	tweakLoseK = 1.0
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
 	tweakSquadT = 20.0
 	// tweakDropV: squad mode only, weight of uncontested supply drops in the calm loot choice (0 = never, as conquer; 1 = 3 cubes + missing HP).
@@ -39,7 +39,7 @@ const (
 	tweakNpcTie = false
 	// tweakRear: squad mode only, target score bonus for a foe showing us its back (rear armor takes rear_mult damage),
 	// and the rear multiplier counted in the lethal laser release (0 = original).
-	tweakRear = 50.0
+	tweakRear = 0.0
 )
 
 type tweakSet struct {
