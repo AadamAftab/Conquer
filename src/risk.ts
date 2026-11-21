@@ -32,6 +32,8 @@ export const RP = {
   healAfterKill: 0.9,
   /** camping: minimum trade advantage to open fire on a favourable target */
   campAdv: 1.5,
+  /** use the v8 brain in practice too (A/B) */
+  legacy: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined

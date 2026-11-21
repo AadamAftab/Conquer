@@ -6,6 +6,7 @@ const file = process.argv[2]
 const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l))
 const hello = lines[0]
 hello.map.dir = "../mechfight-kit/arena"
+const file2 = file
 const b: any = new Brain(hello)
 const acc = new Map<string, number>()
 const wrap = (obj: any, name: string, label: string) => {
@@ -21,6 +22,7 @@ wrap(b.nav.pf, "begin", "astar.begin")
 wrap(b.m, "snap", "snap")
 wrap(b.m, "comp", "comp")
 wrap(b.m, "walkLine", "walkLine")
+for (const k of ["coverPoint", "roam", "dropGoal", "steerLocal", "fireControl", "dodge", "wantedPickup", "duelItem", "fightMove", "look"]) wrap(b.practice, k, "P." + k)
 for (const k of ["zoneGoal", "needRotate", "lootGoal", "dropGoal", "replan", "fireControl", "lookDir", "mortarDodge", "findCover"]) wrap(b, k, k)
 const times: number[] = []
 for (const o of lines.slice(1)) {

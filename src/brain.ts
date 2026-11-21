@@ -5,6 +5,7 @@ import { World, type Track } from "./world.ts"
 import { aimAt, centerOffset, clampPitch, hitProb, hitRadius, leadAim, missDist, predict2, shellLanding, type Aim } from "./combat.ts"
 import { planPeek, Viewshed, type PeekPlan } from "./cover.ts"
 import { assess, RP, type Risk } from "./risk.ts"
+import { Practice } from "./practice.ts"
 import { angDiff, rng, type V2, type V3 } from "./geom.ts"
 
 const UPG_FFA = ["gyros", "plating", "armor", "nanites", "laser_damage", "laser_charge", "lightning_efficiency", "gun_damage", "sensors", "gyros", "gun_rate", "servos", "jets", "lightning_range", "reactor", "capacitor", "gun_mag", "gun_velocity", "lightning_chain", "laser_pierce"]
@@ -52,6 +53,7 @@ export class Brain {
   ninja = false
   hasLightning = false
   meObs: SelfObs | null = null
+  practice: Practice
   cover: V2 | null = null
   coverT = -99
   risk: Risk | null = null
@@ -70,6 +72,7 @@ export class Brain {
     this.rnd = rng((hello.seed ?? 1) ^ 0x5bd1e995)
     this.perCube = Number(cfg.cubes.size_per_cube ?? 0.05)
     this.g = cfg.mech.gravity ?? 22
+    this.practice = new Practice(this)
     this.warmup()
     log(`brain ready in ${(performance.now() - t0).toFixed(0)} ms`)
   }
@@ -115,6 +118,33 @@ export class Brain {
         n += hitProb(1, 1, 2.5) > 0 ? 1 : 0
       }
     }
+    // compile the practice core on a fake match (separate world, nothing leaks into the real one)
+    try {
+      const s0 = m.snap(0, -60, rq, -1, 30)
+      if (s0 >= 0) {
+        const x = m.nodeX(s0), y = m.nodeY(s0), zz = m.surfAt(x, y)
+        const tw = new World(m, this.hello)
+        const tp = new Practice({ m, w: tw, nav: this.nav, hello: this.hello, rnd: rng(3), perCube: this.perCube, g: this.g })
+        const obs: any = {
+          type: "obs", tick: 0, t: 0, alive: 16, offer: null, drops: [], beams: [], sounds: [], events: [], projectiles: [], crates: [], cubes: [], pickups: [],
+          self: { ...fakeMe, id: 0, pos: [x, y, zz], vel: [0, 0, 0], max_energy: 100, grounded: true, upgrades: [], in_zone: true },
+          mechs: [{ id: 5, kind: "mech", pos: [x + 90, y + 20, zz], vel: [6, -2, 0], aim: [3, 0], hp: 900, max_hp: 1400, cubes: 0, weapons: ["gun", "laser"], charging: false }],
+          zone: { center: cfg.zone.start_center, radius: cfg.zone.start_radius, next_center: cfg.zone.start_center, next_radius: 380, shrink_start: 60, shrink_end: 110, dps: 20 },
+        }
+        for (let k = 0; k < 40; k++) {
+          obs.tick = 2 * k
+          obs.t = 0.1 * k
+          obs.mechs[0].pos = [x + 90 + Math.sin(k) * 10, y + 20, zz]
+          obs.self.hp = k < 20 ? 1400 : 400
+          tw.update(obs)
+          tp.act(obs, performance.now())
+        }
+        draw.clear()
+      }
+    } catch (e) {
+      log("practice warmup failed", e)
+    }
+    this.nav.reset()
     if (n < 0) log(n)
   }
 
@@ -133,6 +163,15 @@ export class Brain {
     const T0 = performance.now()
     const w = this.w, m = this.m
     w.update(obs)
+    // practice (house squad): aggressive core; free-for-all: ninja core below
+    if (w.mode !== "ffa" && !RP.legacy) {
+      const a = this.practice.act(obs, T0)
+      this.state = this.practice.state
+      const ms = performance.now() - T0
+      if (ms > 25) this.slowTicks++
+      if (ms > 12) log(`slow act ${ms.toFixed(1)} ms at t=${obs.t} state=${this.state}`)
+      return a
+    }
     const me = obs.self, t = obs.t
     const [x, y, z] = me.pos
     const st = me.stats

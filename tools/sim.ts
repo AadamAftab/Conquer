@@ -22,6 +22,8 @@ const HARD = Number(process.env.SIMHARD ?? -0.5)
 const REAL = process.env.SIMMODE === "real"
 const REAL_ERR = Number(process.env.SIMERR ?? 0.02)
 const REAL_OMNI = process.env.SIMOMNI === "1"
+// SIMFFA=1: free-for-all, every house bot fights the nearest mech it sees (like qualifying/final)
+const FFA = process.env.SIMFFA === "1"
 const lines = gunzipSync(readFileSync(KIT + "/check/stream.jsonl.gz")).toString("utf8").trim().split("\n")
 const HELLO = JSON.parse(lines[0])
 HELLO.map.dir = KIT + "/arena"
@@ -252,6 +254,17 @@ function runMatch(seed: number) {
           m.fire = (a.fire as [boolean, boolean]) ?? [false, false]
           if (a.pick !== undefined && m.offer) applyUpgrade(m, m.offer.choices[a.pick]?.id)
           if (a.take !== undefined) take(m, a.take, a.drop)
+        } else if (FFA) {
+          // nearest mech it currently sees (anyone), else roam to the zone
+          let tgt: Mech | null = null, bd = Infinity
+          for (const o of live) {
+            if (o === m || m.seen.get(o.id) !== t) continue
+            const d = Math.hypot(o.pos[0] - m.pos[0], o.pos[1] - m.pos[1])
+            if (d < bd) (bd = d), (tgt = o)
+          }
+          m.hunter = true
+          if (tgt) houseAct(m, t, Z, tgt, { t, pos: tgt.pos }, R)
+          else houseAct(m, t, Z, m, { t: -99, pos: m.pos }, R)
         } else houseAct(m, t, Z, me, OMNI || (m.hunter && (!REAL || REAL_OMNI)) ? { t, pos: me.pos } : squadSeen, R)
       }
       for (const n of npcs) if (n.alive) npcAct(n, t)
@@ -536,7 +549,7 @@ function blocked(x: number, y: number, z: number) {
 
 function houseAct(m: Mech, t: number, Z: ReturnType<typeof zoneAt>, us: Mech, intel: { t: number; pos: V3 }, R: () => number) {
   const d = Math.hypot(us.pos[0] - m.pos[0], us.pos[1] - m.pos[1])
-  const iSee = m.seen.get(0) === t
+  const iSee = us !== m && m.seen.get(us.id) === t
   const knows = t - intel.t < 6
   m.fire = [false, false]
   m.boost = false

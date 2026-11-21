@@ -176,7 +176,8 @@ export class World {
     this.hurt = this.hurt.filter((h) => t - h.t < 6)
     // practice (house squad, never fight each other) vs free-for-all
     const deadOthers = this.mechCount - obs.alive - this.kills
-    if (this.mode !== "ffa" && deadOthers >= 2 && t < 330) this.mode = "ffa"
+    // free-for-all shows early deaths we did not cause; practice house bots only die late (zone)
+    if (this.mode !== "ffa" && ((deadOthers >= 2 && t < 200) || (deadOthers >= 4 && t < 330))) this.mode = "ffa"
     else if (this.mode === "unknown" && t > 150 && deadOthers === 0) this.mode = "practice"
   }
 
