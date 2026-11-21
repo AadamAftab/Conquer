@@ -452,6 +452,14 @@ var upgradeOrderNano = []string{
 	"mortar_reload", "mortar_splash", "mortar_velocity", "sensors", "jets", "laser_pierce",
 }
 
+// upgradeOrderSquad: the laser order with nanites second (tweakNano): hunters come one after another, so the
+// regen between fights is worth more than another armor stack.
+var upgradeOrderSquad = []string{
+	"plating", "nanites", "armor", "laser_damage", "laser_charge", "gun_damage", "gun_rate", "lightning_efficiency", "lightning_range",
+	"servos", "gun_mag", "gun_velocity", "gyros", "lightning_chain", "reactor", "capacitor",
+	"mortar_reload", "mortar_splash", "mortar_velocity", "sensors", "jets", "laser_pierce",
+}
+
 func pickUpgrade(of *Offer, laserUp, nanoUp bool) int {
 	order := upgradeOrder
 	if laserUp {
@@ -460,6 +468,10 @@ func pickUpgrade(of *Offer, laserUp, nanoUp bool) int {
 	if nanoUp {
 		order = upgradeOrderNano
 	}
+	return pickFrom(of, order)
+}
+
+func pickFrom(of *Offer, order []string) int {
 	best, bestRank := 0, 1<<30
 	for i, c := range of.Choices {
 		rank := len(order)
@@ -490,6 +502,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 
 	if o.Offer != nil && len(o.Offer.Choices) > 0 {
 		p := pickUpgrade(o.Offer, b.P.LaserUp, b.P.NanoUp)
+		if tweakNano && b.pracOn && b.P.LaserUp && !b.P.NanoUp {
+			p = pickFrom(o.Offer, upgradeOrderSquad)
+		}
 		act.Pick = &p
 	}
 
@@ -770,6 +785,18 @@ func (b *Brain) step(o *Obs, act *Action) {
 			if bc != nil {
 				mx, my = b.travel(me, bc[0], bc[1])
 				mode = "fight:cube"
+			}
+		}
+		if tweakFightDropR > 0 && b.pracOn && !(finishing && hpFrac > 0.5) {
+			// a supply drop refills HP mid-fight: walk into its ring and keep shooting from inside it
+			if d := b.fightDrop(o, hpFrac); d != nil {
+				r := b.dropRadius(d)
+				dd := hyp(d.Pos[0]-x, d.Pos[1]-y)
+				if dd > r-3 || hyp(x+mx*2-d.Pos[0], y+my*2-d.Pos[1]) > r-2.5 {
+					mx, my = b.travel(me, d.Pos[0], d.Pos[1])
+				}
+				boost = dd > r+4 && me.Energy > 30
+				mode = "fight:drop"
 			}
 		}
 	case zoneShould && zdist > 2:
@@ -1569,6 +1596,7 @@ func (b *Brain) chooseLoot(o *Obs, hpFrac float64, danger bool) *lootChoice {
 	var best *lootChoice
 	bestU := 0.0
 	econ := b.P.Econ
+	squadDrops := tweakDropV > 0 && b.pracOn
 	consider := func(kind string, id int, pos Vec3, value float64) {
 		if until, ok := b.bad[id]; ok && until > now {
 			return
@@ -1729,18 +1757,111 @@ func (b *Brain) chooseLoot(o *Obs, hpFrac float64, danger bool) *lootChoice {
 		if b.P.UseDrops && dist/me.Stats.WalkSpeed < d.LandsIn+25 && !danger {
 			consider("drop", d.ID, d.Pos, 260)
 		}
+		if squadDrops && !b.P.UseDrops && !danger {
+			// go when we would arrive at most 3 s before it lands; skip it if another mech holds or stands at it
+			eta := math.Max(0, dist-b.dropRadius(d)*0.5) / math.Max(1, me.Stats.WalkSpeed)
+			if d.LandsIn <= eta+3 && (dist < b.dropRadius(d) || b.dropFree(d, me.ID, 6)) {
+				consider("drop", d.ID, d.Pos, tweakDropV*b.dropWorth(me, hpFrac))
+			}
+		}
 	}
 	if best == nil {
 		b.lootID = -1
 		return nil
 	}
+	lim := 30.0
+	if squadDrops && best.kind == "drop" {
+		lim = 60
+	}
 	if best.id != b.lootID {
 		b.lootID = best.id
 		b.lootSince = now
-	} else if now-b.lootSince > 30 {
+	} else if now-b.lootSince > lim {
 		b.bad[best.id] = now + 60
 		b.lootID = -1
 		return nil
+	}
+	return best
+}
+
+func (b *Brain) dropRadius(d *Drop) float64 {
+	switch {
+	case d.Radius > 0:
+		return d.Radius
+	case b.Cfg.Drops.Radius > 0:
+		return b.Cfg.Drops.Radius
+	}
+	return 8
+}
+
+// dropFree: no other mech holds the capture clock or was seen within the ring (plus pad) in the last 3 s.
+func (b *Brain) dropFree(d *Drop, myID int, pad float64) bool {
+	if d.Holder != nil && *d.Holder != myID {
+		return false
+	}
+	r := b.dropRadius(d) + pad
+	for _, t := range b.tracks {
+		if b.now-t.Seen < 3 && hyp(t.Pos[0]-d.Pos[0], t.Pos[1]-d.Pos[1]) < r {
+			return false
+		}
+	}
+	return true
+}
+
+// dropWorth: a drop's cubes (valued like loose cubes, 75 below the stat cap, 25 above) plus the HP it refills.
+func (b *Brain) dropWorth(me *Self, hpFrac float64) float64 {
+	n := b.Cfg.Drops.Cubes
+	if n <= 0 {
+		n = 3
+	}
+	under := min(max(b.Cfg.Cubes.StatCap-me.Cubes, 0), n)
+	return 75*float64(under) + 25*float64(n-under) + 400*clamp(1-hpFrac, 0, 1)
+}
+
+// fightDrop: the nearest supply drop within tweakFightDropR that is on the ground by the time we get there,
+// not held or stood on by another mech (unless we are already in its ring), and safe from the zone until captured.
+func (b *Brain) fightDrop(o *Obs, hpFrac float64) *Drop {
+	me := &o.Self
+	if hpFrac >= 0.9 && me.Cubes >= b.Cfg.Cubes.StatCap {
+		return nil
+	}
+	x, y := me.Pos[0], me.Pos[1]
+	z := &o.Zone
+	cur := b.curZone(z)
+	walk := math.Max(1, me.Stats.WalkSpeed)
+	var best *Drop
+	bestD := tweakFightDropR
+	for i := range o.Drops {
+		d := &o.Drops[i]
+		dd := hyp(d.Pos[0]-x, d.Pos[1]-y)
+		if dd > bestD {
+			continue
+		}
+		r := b.dropRadius(d)
+		eta := math.Max(0, dd-r*0.5) / walk
+		if d.LandsIn > eta+0.5 {
+			continue
+		}
+		if dd >= r && !b.dropFree(d, me.ID, 4) {
+			continue
+		}
+		if hyp(d.Pos[0]-cur.X, d.Pos[1]-cur.Y) > cur.R-6 {
+			continue
+		}
+		capS := d.CaptureS
+		if capS <= 0 {
+			capS = b.Cfg.Drops.CaptureS
+		}
+		if d.Holder != nil && *d.Holder == me.ID {
+			capS -= d.Progress
+		}
+		if b.zoneDeadline(z, d.Pos[0], d.Pos[1], 6) < b.now+eta+capS+2 {
+			continue
+		}
+		if nf := b.W.NearestFree(b.W.Cell(d.Pos[0], d.Pos[1])); nf < 0 || b.W.Comp[nf] != b.W.MainComp {
+			continue
+		}
+		best, bestD = d, dd
 	}
 	return best
 }
