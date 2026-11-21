@@ -66,9 +66,9 @@ export const PP = {
   /** econ: back off from drones shooting us when badly hurt */
   econDroneBack: false,
   /** free-for-all (econ core): only engage mechs that fight us, are weak, busy with someone else or close; hide from the rest */
-  ffaPick: true,
+  ffaPick: false,
   /** free-for-all (econ core): retreat to cover when two different mechs hit us */
-  ffaRetreat: true,
+  ffaRetreat: false,
   /** free-for-all (econ core): how long hits / other fights keep a mech engageable (s) */
   ffaMemS: 3,
   /** free-for-all opening: stay out of every known mech's sight, fight only attackers and close mechs */
