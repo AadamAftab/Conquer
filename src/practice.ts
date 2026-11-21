@@ -132,9 +132,9 @@ export const PP = {
   /** only engage mechs that are close, hit us, close in, aim at us, are weak, or late game; max 240 m */
   sqEngage: false,
   /** econ: when idle, explore the nearest unvisited 100 m grid point inside the zone instead of drifting to its centre */
-  econExplore: true,
+  econExplore: false,
   /** econ (practice): only engage mechs that are close, hit us, close in, aim at us, are weak, or late game */
-  econEngage: false,
+  econEngage: true,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
