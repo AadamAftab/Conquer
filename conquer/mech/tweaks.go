@@ -7,5 +7,5 @@ const (
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
 	tweakLoseK = 1.0
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
-	tweakSquadT = 2.0
+	tweakSquadT = 20.0
 )
