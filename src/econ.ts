@@ -195,7 +195,7 @@ export class Econ {
       const tc: V3 = [T.pos[0] + T.vel[0] * age, T.pos[1] + T.vel[1] * age, T.pos[2] + 4.5 * tScale]
       const hasLos = m.los(x, y, muzZ, tc[0], tc[1], tc[2])
       const tFrac = T.hp / Math.max(1, T.maxHp)
-      const finishing = tFrac < 0.2 && hpFrac > 0.2 && threats <= 2
+      const finishing = tFrac < PP.econFinish && hpFrac > 0.2 && threats <= 2
       const lk = this.ffa ? 1 : PP.econLoseK
       let losing = !finishing && ((hpFrac < 0.35 * lk && tFrac > hpFrac + 0.1) || (threats >= 2 && hpFrac < 0.55 * lk) || (threats >= 3 && hpFrac < Math.min(0.95, 0.8 * lk)))
       if (this.ffa && PP.ffaRetreat && !finishing && !losing) {
