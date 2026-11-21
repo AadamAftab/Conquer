@@ -6,7 +6,7 @@ const (
 	// It acts before the bot can tell practice from free-for-all, so it changes free-for-all too.
 	tweakHopT = 0.0
 	// tweakLoseK: scale of the TTUN "losing" thresholds of the squad lose rule (1 = original).
-	tweakLoseK = 1.0
+	tweakLoseK = 0.3
 	// tweakSquadT: time (s) after which the squad (practice) parameters take over from the cautious opening ones (20 = original).
 	tweakSquadT = 20.0
 	// tweakDropV: squad mode only, weight of uncontested supply drops in the calm loot choice (0 = never, as conquer; 1 = 3 cubes + missing HP).
@@ -47,13 +47,13 @@ const (
 	tweakFFAUntil = 0.0
 	// Squad mode only, mobility (boost = 19.5 m/s instead of 11.7 m/s walking; ground only, never while the laser charges):
 	// tweakJinkBoost: boost the fight strafe when a target is visible and energy > 40.
-	tweakJinkBoost = false
+	tweakJinkBoost = true
 	// tweakDodgeBoost: boost on every bullet or laser dodge when energy > 25 (original: laser dodges only).
-	tweakDodgeBoost = false
+	tweakDodgeBoost = true
 	// tweakThreatBoost: boost whenever moving under threat (a target, or hit in the last 2 s) with energy > 30.
-	tweakThreatBoost = false
+	tweakThreatBoost = true
 	// tweakMobUp: upgrade order plating, armor, servos, jets, reactor, then the laser order.
-	tweakMobUp = false
+	tweakMobUp = true
 )
 
 type tweakSet struct {
