@@ -28,15 +28,15 @@ const (
 	// tweakStick: target score bonus for keeping the current target (Params.Stick, 120 = original).
 	tweakStick = 120.0
 	// tweakHear: squad mode only, look toward enemy sounds no visible mech explains and side-step unseen laser charges (false = original).
-	tweakHear = true
+	tweakHear = false
 	// tweakNpcGoneHP: a drone that vanishes from the observation below this HP fraction is dead and forgotten (0 = original: chased and shot for up to 12 s).
-	tweakNpcGoneHP = 0.0
+	tweakNpcGoneHP = 0.45
 	// tweakCubeLevel: in-fight cube detours skip cubes on roofs or decks above our level, which cannot be picked up (false = original).
-	tweakCubeLevel = false
+	tweakCubeLevel = true
 	// tweakNoAirBoost: no boost while airborne outside escape and shell dodging, since boost in the air is a jet climb (false = original).
-	tweakNoAirBoost = false
+	tweakNoAirBoost = true
 	// tweakNpcTie: ties between drones that hit us are broken by distance then id instead of map order (false = original, not reproducible).
-	tweakNpcTie = false
+	tweakNpcTie = true
 )
 
 type tweakSet struct {
