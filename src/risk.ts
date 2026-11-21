@@ -45,6 +45,8 @@ export const RP = {
   /** opening move for the first openT seconds (see Navigator.openMode); "none" = plain start */
   openMode: "hop" as "none" | "hop" | "side" | "jet" | "boost",
   openT: 4,
+  /** stop the opening move as soon as a mech hits us */
+  openCancel: false,
   /** free-for-all brain: "ninja" (v8 camping) or "econ" (economy core with free-for-all engagement rules) */
   ffaCore: "econ" as "ninja" | "econ",
 }

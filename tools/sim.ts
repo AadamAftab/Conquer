@@ -478,7 +478,7 @@ function runMatch(seed: number) {
   return {
     seed, place, score: 16 - place, t: Math.round(tick * DT), alive: me.alive, ...st, dealt: Math.round(st.dealt), taken: Math.round(st.taken), byHunter: Math.round(st.byHunter), byOther: Math.round(st.byOther), byNpc: Math.round(st.byNpc), zoneDmg: Math.round(st.zoneDmg),
     p99: times[Math.floor(times.length * 0.99)]?.toFixed(1), max: times[times.length - 1]?.toFixed(1), late, wall: ((performance.now() - t0wall) / 1000).toFixed(1),
-    weapons: me.weapons.map((w) => w?.kind ?? "-").join("+"), cubesNow: me.cubes, upg: me.upgrades.join(","), states: topStates,
+    weapons: me.weapons.map((w) => w?.kind ?? "-").join("+"), cubesNow: me.cubes, mode: (me.brain as any)?.w?.mode, upg: me.upgrades.join(","), states: topStates,
   }
 
   function gainCubes(m: Mech, n: number) {

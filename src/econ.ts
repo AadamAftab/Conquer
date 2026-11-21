@@ -202,7 +202,7 @@ export class Econ {
         if (by.size >= 2 && hpFrac < 0.85) losing = true
       }
       // free-for-all: no laser against a laser carrier at range -> do not duel in the open
-      if (!losing && !finishing && this.ffa && PP.ffaOutgun > 0 && iLaser < 0 && T.weapons.includes("laser") && d > PP.ffaOutgun && tFrac > 0.35) losing = true
+      if (!losing && !finishing && (this.ffa || PP.outgunAll) && PP.ffaOutgun > 0 && iLaser < 0 && T.weapons.includes("laser") && d > PP.ffaOutgun && tFrac > 0.35) losing = true
       if (losing) this.hideUntil = t + 6
       // aim and fire
       const r = this.fireAt(me, T, tc, d, age, seen, hasLos, iGun, iLaser, iLight, iMortar)

@@ -176,6 +176,7 @@ export class Brain {
     const w = this.w, m = this.m
     w.update(obs)
     // practice (house squad): aggressive core; free-for-all: ninja core below
+    if (RP.openCancel && obs.t < this.nav.openUntil && obs.events.some((ev) => ev.type === "damaged" && ev.weapon !== "zone" && ev.weapon !== "npc")) this.nav.openUntil = 0
     const ffaEcon = w.mode === "ffa" && RP.ffaCore === "econ" && !this.forceCore
     if (this.forceCore || ffaEcon || ((w.mode !== "ffa" || RP.ffaPractice) && !RP.legacy)) {
       const core = ffaEcon || (this.forceCore || PP.core) === "econ" ? this.econ : this.practice

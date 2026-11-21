@@ -82,6 +82,8 @@ export const PP = {
   ffaFocus: false,
   /** free-for-all: without a laser, take cover from a laser carrier beyond this distance unless it is weak (0 = off) */
   ffaOutgun: 70,
+  /** apply the laser-carrier cover rule in practice too */
+  outgunAll: false,
   /** free-for-all: a visible laser charging at us -> break its line of sight (cover within 18 m) or side-step with boost */
   ffaLaserLos: false,
   /** cover = out of sight (tree crowns count beyond near range) instead of out of the line of fire: "ffa" only in free-for-all, "all" always */
