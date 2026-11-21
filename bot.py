@@ -46,6 +46,8 @@ from brain import Brain
 from combat import CombatController
 from motion import MotionController
 from nav import NavGrid, PathFollower
+from influence import InfluenceMap
+from utility import UtilityBrain
 
 
 # ---------------------------------------------------------------------------
@@ -97,11 +99,18 @@ class Bot:
                f"in {(time.perf_counter() - t_nav) * 1000:.0f} ms")
 
         # 5. Subsystem controllers
+        influence = None
+        if C.USE_INFLUENCE_COVER and grid is not None and grid.ok:
+            try:
+                influence = InfluenceMap(grid, self.world)       # static cover layer, built once
+            except Exception as exc:
+                mf.log(f"Bot: InfluenceMap failed ({exc!r}) — falling back to MRM cover")
         self.tracker = EpistemicTracker()
-        self.brain   = Brain()
+        self.brain   = UtilityBrain() if C.USE_UTILITY_BRAIN else Brain()
         self.combat  = CombatController()
         self.motion  = MotionController(nav=PathFollower(grid),
-                                        seed=int(hello.get("seed", 0) or 0))
+                                        seed=int(hello.get("seed", 0) or 0),
+                                        influence=influence)
 
         # 5. Stale-action cache — returned on hard-deadline miss
         self._last_move: List[float] = [0.0, 0.0]

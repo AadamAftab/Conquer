@@ -199,6 +199,19 @@ LASER_DODGE_DEG: float     = 10.0  # enemy charging a laser aimed within this of
 BULLET_DANGER_M: float     = 1.5   # extra miss margin around our body for bullets
 SPLASH_DANGER_M: float     = 3.0   # extra margin around mortar splash radius
 PEEK_ON_RELOAD: bool       = True  # break LOS while the gun reloads
+
+# ---- Optional architectures (all active for submission) ----
+USE_CONTEXT_STEER: bool    = True   # steer.py: interest/danger maps instead of vector blending
+USE_LEAD_LEARNER: bool     = True   # combat.py: learn the best lead multiplier from virtual bullets
+USE_INFLUENCE_COVER: bool  = True   # influence.py: grid cover queries instead of the MRM ring
+USE_UTILITY_BRAIN: bool    = True   # utility.py: continuous behaviour scores instead of the FSM
+ISOLATE_MIN_ENEMIES: int   = 2      # influence "isolate" corner query when this many enemies are known
+ISOLATE_REFRESH_S: float   = 0.6    # ...recomputed this often (line-of-sight checks are not free)
+ISOLATE_WEIGHT: float      = 1.0    # ...and pulled toward with this weight
+STEER_SAFE_MARGIN: float   = 0.45   # slots within this of the lowest danger count as safe
+STEER_BULLET_HORIZON_S: float = 0.7 # only bullets reaching us within this are simulated
+STEER_BULLET_MARGIN_M: float  = 2.5 # extra clearance around our body when judging a miss
+STEER_BULLET_WEIGHT: float    = 2.0 # danger of a bullet that would hit us dead on
 OTHER_FOE_PUSH: float      = 0.5   # push away from secondary enemies within 60 m
 
 # ---------------------------------------------------------------------------

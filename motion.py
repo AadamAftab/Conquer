@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 
 import config as C
 import risk as R
+import steer as S
 from world import Rooftop, WorldIndex
 
 Vec2 = Tuple[float, float]
@@ -56,8 +57,11 @@ def _wrap(a: float) -> float:
 
 
 class MotionController:
-    def __init__(self, nav=None, seed: int = 0) -> None:
+    def __init__(self, nav=None, seed: int = 0, influence=None) -> None:
         self.nav = nav                       # nav.PathFollower or None
+        self.influence = influence           # influence.InfluenceMap or None
+        self._t_last: float = 0.0
+        self._isolate: tuple = (-99.0, None)  # (time computed, cell) cache for the isolate query
         self._rng = random.Random(seed)
         self._prev_dir: Optional[Vec2] = None
         self._tick_counter: int = 0
@@ -166,6 +170,7 @@ class MotionController:
         next_r           = zone["next_radius"]
 
         self._mrm_budget = mrm_budget_s
+        self._t_last = t
         self._remember_loot(obs, sx, sy, t)
         self._note_visited(sx, sy)
         self._note_hurt(obs, t)
@@ -210,6 +215,10 @@ class MotionController:
                 world=world, state=state if retreating else "EVADE",
                 time_budget_s=self._mrm_budget,
             )
+            if C.USE_INFLUENCE_COVER and self.influence is not None and enemies:
+                cell = self.influence.best_cell(pos, enemies, zone, mode="hide")
+                if cell is not None:                       # a cell nobody can see beats the ring heuristic
+                    d = self._nav_dir(pos, cell, t, nav_budget_s)
             if calm_hide:
                 boost = urgent and energy > C.DODGE_BOOST_ENERGY      # quiet: boost is audible at 90 m
                 mode = "calm-hide"
@@ -405,6 +414,24 @@ class MotionController:
         a = math.atan2(sy - fy, sx - fx)                    # angle of us around foe
         tx, ty = -math.sin(a) * self._strafe_sign, math.cos(a) * self._strafe_sign
 
+        # --- Against a squad: walk to a corner where only our target can see us ---
+        iso = None
+        if C.USE_INFLUENCE_COVER and self.influence is not None and len(enemies) >= C.ISOLATE_MIN_ENEMIES:
+            if t - self._isolate[0] >= C.ISOLATE_REFRESH_S:
+                self._isolate = (t, self.influence.best_cell(pos, enemies, obs["zone"], mode="isolate",
+                                                             target_id=foe.get("id")))
+            iso = self._isolate[1]
+
+        if C.USE_CONTEXT_STEER:
+            d = self._steer_combat(obs, foe, enemies, world, radial, (ux, uy), (tx, ty), goal=iso)
+            charging = bool(w1 and w1.get("kind") == "laser" and (w1.get("charge", 0.0) or 0.0) > 0.0)
+            boost = grounded and not charging and (
+                energy > C.STRAFE_BOOST_ENERGY
+                or (urgent and energy > C.DODGE_BOOST_ENERGY)
+                or (radial < -0.5 and energy > 30.0))
+            # steering already weighed walls, bullets and the zone: no second blend or wall bend
+            return self._finish(d, boost, False, None, pos, dodge=None, mode="steer")
+
         mx = C.RADIAL_WEIGHT * radial * ux + C.STRAFE_WEIGHT * tx
         my = C.RADIAL_WEIGHT * radial * uy + C.STRAFE_WEIGHT * ty
 
@@ -418,6 +445,11 @@ class MotionController:
                 k = C.OTHER_FOE_PUSH * (60.0 - de) / 60.0
                 mx -= k * (ex - sx) / de
                 my -= k * (ey - sy) / de
+
+        if iso is not None:
+            gux, guy = _unit(iso[0] - sx, iso[1] - sy)
+            mx += C.ISOLATE_WEIGHT * gux
+            my += C.ISOLATE_WEIGHT * guy
 
         # --- Grab cubes mid-fight: a kill drops cubes at our feet, each worth +4 %
         #     max HP (healed at once) and +4 % damage, and they unlock upgrades ---
@@ -451,6 +483,77 @@ class MotionController:
             or (radial < -0.5 and energy > 30.0))
         return self._finish(d, boost, False, world, pos, dodge=dodge, mode="strafe",
                             flip_on_block=True)
+
+    def _steer_combat(self, obs: dict, foe: dict, enemies: List[dict], world, radial: float,
+                      u: Vec2, tvec: Vec2, goal: Optional[Vec2] = None) -> Vec2:
+        """Combat heading by context steering (see steer.py)."""
+        me = obs["self"]
+        pos = me["pos"]
+        sx, sy = pos[0], pos[1]
+        vel = me.get("vel") or [0.0, 0.0, 0.0]
+        stats = me.get("stats", {}) or {}
+        speed = stats.get("walk_speed", C.WALK_SPEED)
+        accel = stats.get("ground_accel", C.GROUND_ACCEL)
+        height = stats.get("height", C.MECH_HEIGHT)
+        interest, danger = S.new_map(), S.new_map()
+
+        # --- what we want ---
+        S.add_dir(interest, tvec[0], tvec[1], C.STRAFE_WEIGHT)
+        if goal is not None:                       # influence-map corner (isolate the target)
+            S.add_dir(interest, goal[0] - sx, goal[1] - sy, C.ISOLATE_WEIGHT)
+        if radial:
+            sgn = 1.0 if radial > 0 else -1.0
+            S.add_dir(interest, u[0] * sgn, u[1] * sgn, C.RADIAL_WEIGHT * abs(radial))
+        if me.get("cubes", 0) < C.STAT_CAP_CUBES:
+            best_cube = None
+            for (kind, _cid), v in self._loot.items():
+                if kind == "cube":
+                    dc = math.hypot(v["pos"][0] - sx, v["pos"][1] - sy)
+                    if dc <= C.CUBE_FIGHT_RANGE_M and (best_cube is None or dc < best_cube[0]):
+                        best_cube = (dc, v["pos"])
+            if best_cube is not None:
+                S.add_dir(interest, best_cube[1][0] - sx, best_cube[1][1] - sy, C.CUBE_FIGHT_WEIGHT)
+        zone = obs["zone"]
+        ncx, ncy, nr = zone["next_center"][0], zone["next_center"][1], zone["next_radius"]
+        dn = math.hypot(sx - ncx, sy - ncy)
+        if dn > nr * 0.9:
+            S.add_dir(interest, ncx - sx, ncy - sy, min(1.0, (dn - nr * 0.9) / 20.0 + 0.3))
+
+        # --- what could kill us ---
+        S.wall_danger(danger, world, pos)
+        for e in enemies:                                   # don't walk into the rest of the squad
+            if e is foe:
+                continue
+            de = math.hypot(e["pos"][0] - sx, e["pos"][1] - sy)
+            if 1.0 < de < 60.0:
+                S.add_dir(danger, e["pos"][0] - sx, e["pos"][1] - sy,
+                          1.6 * C.OTHER_FOE_PUSH * (60.0 - de) / 60.0, power=2.0)
+        projs = obs.get("projectiles") or []
+        S.bullet_danger(danger, pos, vel, pos[2] + height * 0.5, height * 0.5, projs,
+                        stats.get("radius", C.MECH_RADIUS), speed, accel)
+        shells = []
+        for p in projs:
+            if p.get("kind") == "mortar":
+                land = self._predict_landing(p["pos"][0], p["pos"][1], p["pos"][2],
+                                             p["vel"][0], p["vel"][1], p["vel"][2], world, pos[2])
+                if land is not None:
+                    shells.append(land)
+        S.shell_danger(danger, pos, vel, shells, speed, accel)
+        for e in enemies:                                   # a laser charging along a line through us
+            if e.get("charging") and e.get("aim"):
+                to_me = math.atan2(sy - e["pos"][1], sx - e["pos"][0])
+                if math.degrees(abs(_wrap(e["aim"][0] - to_me))) <= C.LASER_DODGE_DEG:
+                    bx, by = math.cos(e["aim"][0]), math.sin(e["aim"][0])
+                    S.add_dir(danger, bx, by, 1.2)
+                    S.add_dir(danger, -bx, -by, 1.2)
+        zr = zone["radius"]
+        for k in range(S.N):                                # don't run into the gas
+            px, py = sx + S.DIRS[k][0] * 15.0, sy + S.DIRS[k][1] * 15.0
+            if math.hypot(px - zone["center"][0], py - zone["center"][1]) > zr - 6.0:
+                danger[k] += 1.5
+
+        d = S.resolve(interest, danger, C.STEER_SAFE_MARGIN)
+        return d if d is not None else tvec
 
     def _update_strafe(self, t: float, holds_lightning: bool, foe: dict,
                        sx: float, sy: float) -> None:
@@ -777,7 +880,12 @@ class MotionController:
 
     def _cover_dir(self, pos, enemies: List[dict], zone: dict, world,
                    is_on_roof: bool = False) -> Vec2:
-        """Direction that breaks line of sight to the known enemies (MRM cover scoring)."""
+        """Direction that breaks line of sight to the known enemies (influence-map query when
+        enabled, otherwise the MRM ring)."""
+        if C.USE_INFLUENCE_COVER and self.influence is not None and enemies:
+            cell = self.influence.best_cell(pos, enemies, zone, mode="hide")
+            if cell is not None:
+                return self._nav_dir(pos, cell, self._t_last, C.NAV_BUDGET_S)
         return R.compute_mrm(
             pos=pos, enemy_positions=[e["pos"] for e in enemies],
             zone_cx=zone["center"][0], zone_cy=zone["center"][1], zone_r=zone["radius"],

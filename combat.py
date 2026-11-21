@@ -508,6 +508,76 @@ def should_take_pickup(obs: dict, pickup: dict) -> bool:
 # 6. CombatController — main per-tick fire-control logic
 # ---------------------------------------------------------------------------
 
+class LeadLearner:
+    """
+    Guess-factor style statistical targeting (the Robocode champions' trick).
+
+    Linear lead assumes the target keeps its current velocity for the whole flight;
+    against a bot that strafe-flips it overshoots on every reversal. So we ask the match
+    itself: every time we fire, remember a VIRTUAL bullet wave (where we shot from, where
+    the target was and how it moved). When the wave reaches the target's distance, check
+    which lead multipliers (0 = aim at it, 1 = full linear lead, ...) WOULD have hit given
+    where the target actually is, and tally that per distance bucket. The multiplier with
+    the best tally becomes the lead scale for the next shots. Until a bucket has enough
+    samples, or while 1.0 is as good as anything, we keep plain linear lead.
+    """
+    MULTS = (0.0, 0.4, 0.7, 1.0, 1.3)
+    BUCKETS = (50.0, 100.0, 160.0, 1e9)
+    MIN_SAMPLES = 8
+    DECAY = 0.97
+
+    def __init__(self) -> None:
+        self.waves: List[dict] = []
+        self.score = [[0.0] * len(self.MULTS) for _ in self.BUCKETS]
+        self.count = [0] * len(self.BUCKETS)
+
+    def _bucket(self, d: float) -> int:
+        for i, b in enumerate(self.BUCKETS):
+            if d <= b:
+                return i
+        return len(self.BUCKETS) - 1
+
+    def best(self, dist: float) -> float:
+        b = self._bucket(dist)
+        if self.count[b] < self.MIN_SAMPLES:
+            return 1.0
+        s = list(self.score[b])
+        s[self.MULTS.index(1.0)] += 0.5            # prior: linear lead until something clearly beats it
+        return self.MULTS[max(range(len(s)), key=lambda i: s[i])]
+
+    def on_shot(self, t: float, org, tid: int, tpos, tvel, speed: float) -> None:
+        self.waves.append({"t": t, "ox": org[0], "oy": org[1], "id": tid,
+                           "px": tpos[0], "py": tpos[1], "vx": tvel[0], "vy": tvel[1],
+                           "speed": max(speed, 1.0)})
+        if len(self.waves) > 24:
+            self.waves.pop(0)
+
+    def update(self, t: float, targets: Dict[int, Tuple[float, float, float, float]]) -> None:
+        keep = []
+        for w in self.waves:
+            age = t - w["t"]
+            tg = targets.get(w["id"])
+            if age > 2.5 or (tg is None and age > 0.4):
+                continue
+            if tg is None:
+                keep.append(w)
+                continue
+            dist_now = math.hypot(tg[0] - w["ox"], tg[1] - w["oy"])
+            if w["speed"] * age < dist_now - 1.0:       # the wave has not reached it yet
+                keep.append(w)
+                continue
+            actual = math.atan2(tg[1] - w["oy"], tg[0] - w["ox"])
+            body = math.atan2(C.MECH_RADIUS, max(dist_now, 1.0))
+            flight = math.hypot(w["px"] - w["ox"], w["py"] - w["oy"]) / w["speed"]
+            b = self._bucket(dist_now)
+            for i, m in enumerate(self.MULTS):
+                ang = math.atan2(w["py"] + w["vy"] * flight * m - w["oy"],
+                                 w["px"] + w["vx"] * flight * m - w["ox"])
+                self.score[b][i] = self.score[b][i] * self.DECAY + (
+                    1.0 if abs(_wrap(ang - actual)) < body else 0.0)
+            self.count[b] += 1
+
+
 class CombatController:
     """
     Wraps all weapon logic. Called each tick with the latest observation
@@ -540,6 +610,8 @@ class CombatController:
         self._npc_hurt_t:   float = -1e9             # when a drone last hit us
         # Current target (read by motion.py for positioning)
         self.target: Optional[dict] = None
+        self._learner = LeadLearner()
+        self._last_wave_t: float = -1e9
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -663,6 +735,9 @@ class CombatController:
             if state in ("DISENGAGE_REGEN", "EVADE", "RECOVER") or (hurt and not drone_on_us):
                 target = None
         self.target = target
+        if C.USE_LEAD_LEARNER:
+            self._learner.update(t, {m["id"]: (m["pos"][0], m["pos"][1], m["vel"][0], m["vel"][1])
+                                     for m in obs.get("mechs", []) if m.get("kind") == "mech"})
 
         # ---- Active Torso Scanning when no target ----
         if target is None:
@@ -730,7 +805,11 @@ class CombatController:
                                        tgt_pos[0], tgt_pos[1], tgt_pos[2] + tgt_h)
 
         # ---- Primary aim: gun quadratic lead ----
-        gun_aim = gun_lead_aim(pos, tgt_pos, tgt_vel, muzzle_h, center_h=tgt_h)
+        lead_vel = tgt_vel
+        if C.USE_LEAD_LEARNER and target.get("kind") == "mech":
+            mult = self._learner.best(dist_to_target)        # learned lead scale (1.0 = linear lead)
+            lead_vel = [v * mult for v in tgt_vel]
+        gun_aim = gun_lead_aim(pos, tgt_pos, lead_vel, muzzle_h, center_h=tgt_h)
         if gun_aim is None:
             dx = tgt_pos[0] - pos[0]
             dy = tgt_pos[1] - pos[1]
@@ -885,5 +964,10 @@ class CombatController:
             fire0 = False
             fire1 = False
 
+        if (C.USE_LEAD_LEARNER and fire0 and target.get("kind") == "mech"
+                and t - self._last_wave_t >= C.GUN_COOLDOWN * 0.9):
+            self._learner.on_shot(t, pos, target.get("id", -1), tgt_pos,
+                                  target.get("vel", [0.0, 0.0, 0.0]), C.GUN_SPEED)
+            self._last_wave_t = t
         action["fire"] = [fire0, fire1]
         return action
