@@ -53,6 +53,8 @@ export const PP = {
   aimComp: false,
   gunLos: false,
   cubeMemS: 3,
+  /** plain linear gun lead (2 iterations, +0.05 s, vertical clamp 6 m) instead of the strafe model */
+  linearLead: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -564,6 +566,18 @@ export class Practice {
     return null
   }
 
+  /** Linear lead: target position + velocity x flight time (2 passes), vertical lead clamped to 6 m. */
+  private leadLinear(o: V3, tr: Track, speed: number, delay: number, zOff: number): Aim {
+    const c: V3 = [tr.pos[0], tr.pos[1], tr.pos[2] + zOff]
+    let tt = Math.hypot(c[0] - o[0], c[1] - o[1], c[2] - o[2]) / speed + delay
+    let p: V3 = c
+    for (let k = 0; k < 2; k++) {
+      p = [c[0] + tr.vel[0] * tt, c[1] + tr.vel[1] * tt, c[2] + clamp(tr.vel[2] * tt, -6, 6)]
+      tt = Math.hypot(p[0] - o[0], p[1] - o[1], p[2] - o[2]) / speed + delay
+    }
+    return aimAt(o, p)
+  }
+
   /** Farm target when no mech can be shot (any mode): crates within 150 m, drones within 140 m when healthy. */
   private farmTarget(x: number, y: number, z: number, t: number, hpFrac: number, safe: (x: number, y: number) => boolean): Track | null {
     const w = this.h.w, m = this.h.m
@@ -863,7 +877,7 @@ export class Practice {
       const G = slots[iGun]!
       const delay = Math.max(1, Math.ceil(Math.max(0, G.cooldown) / TICK - 1e-6)) * TICK
       const o = at(delay)
-      gunAim = leadAim(m, o, tr, G.stats.speed ?? 252, delay, off, g)
+      gunAim = PP.linearLead ? this.leadLinear(o, tr, G.stats.speed ?? 252, delay, off) : leadAim(m, o, tr, G.stats.speed ?? 252, delay, off, g)
       const d = gunAim.dist
       const [ey, ep] = errAfter(gunAim, delay)
       const ammo = G.ammo ?? 1
