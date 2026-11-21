@@ -119,6 +119,18 @@ export const PP = {
   coverSees: "off" as "off" | "ffa" | "all",
   /** hit by a mech we cannot see and nothing targeted: run to cover from the hit bearing instead of looting or healing in place */
   unseenCover: "off" as "off" | "ffa" | "all",
+  /** practice ("lance") core, squad-mode methods of the public giddy bot (5.8): */
+  /** retreat = TTUN losing rule, held only 1.5 s after the last losing signal */
+  sqLose: false,
+  /** close in to this distance on a target below sqFinishHp (0 = off) */
+  sqFinishR: 0,
+  sqFinishHp: 0.38,
+  /** release a partly charged laser when 80% of its damage kills */
+  sqLethal: false,
+  /** go for cubes this close even mid-fight (x0.57 when below half hp; 0 = off) */
+  sqFightCube: 0,
+  /** only engage mechs that are close, hit us, close in, aim at us, are weak, or late game; max 240 m */
+  sqEngage: false,
 }
 try {
   const env = typeof process !== "undefined" ? process.env.BOTP : undefined
@@ -152,6 +164,7 @@ export class Practice {
   climbUntil = -1
   scanYaw = 0
   hideUntil = -1
+  loseAt = -99
   lootBoosting = false
   stuckAcc = 0
   detourUntil = -1
@@ -228,8 +241,16 @@ export class Practice {
     // ---------- target ----------
     let T: Seen | null = null
     let ts = Infinity
+    const lateGame = obs.zone.next_radius <= 70 || obs.alive <= 3
     for (const s of seen) {
       const e = s.e
+      if (PP.sqEngage) {
+        const toMe = Math.atan2(y - e.pos[1], x - e.pos[0])
+        const aimed = Math.abs(angDiff(e.aim[0], toMe)) < 0.22
+        const closing = e.vel[0] * Math.cos(toMe) + e.vel[1] * Math.sin(toMe) > 3
+        const eng = s.d < 60 || t - e.hitUsT < 6 || lateGame || (closing && s.d < 180) || (e.hp < 0.4 * e.maxHp && s.d < 160) || (aimed && s.d < 190)
+        if (!eng || s.d > 240) continue
+      }
       let sc = s.d + 0.2 * e.hp
       if (e.hp <= 0.3 * e.maxHp) sc -= 100
       if (!s.shoot) sc += 400
@@ -248,6 +269,8 @@ export class Practice {
     const many = threats.length >= 3 || (threats.length >= 2 && hpFrac < PP.manyHp) || dpsIn > PP.manyDps || hiddenBearing !== null
     const outranged = !hasLaser && threats.some((s) => s.e.weapons.includes("laser") && s.d > 70)
     const finishing = shootable && T!.e.hp <= PP.finishFrac * T!.e.maxHp && dT < 130 && hpFrac > 0.3 && threats.length <= 2
+    const crowd = seen.filter((s) => s.vis && s.d < 150).length
+    const finishIn = PP.sqFinishR > 0 && shootable && T!.e.hp < PP.sqFinishHp * T!.e.maxHp && hpFrac > 0.42 && crowd <= 2
     const closeFight = (shootable && dT < 40 && (hasLight || hpFrac > 0.5)) || finishing
     let losing = false
     if (PP.ttun) {
@@ -255,6 +278,13 @@ export class Practice {
       const tFrac = T ? T.e.hp / Math.max(1, T.e.maxHp) : 0
       losing = !finishing && ((hpFrac < PP.loseHp1 && T !== null && tFrac > hpFrac + 0.1) || (n160 >= 2 && hpFrac < PP.loseHp2) || (n160 >= 3 && hpFrac < PP.loseHp3))
       if (losing) this.hideUntil = t + PP.hideS
+    }
+    if (PP.sqLose) {
+      const n160 = seen.filter((s) => s.vis && s.d < 160).length
+      const tFrac = T ? T.e.hp / Math.max(1, T.e.maxHp) : 1
+      let l = (n160 >= 2 && hpFrac < 0.55) || (n160 >= 3 && hpFrac < 0.8) || (T !== null && hpFrac < 0.35 && tFrac > hpFrac + 0.1)
+      if (T !== null && tFrac < 0.25 && hpFrac > 0.2 && n160 <= 2) l = false
+      if (l) this.loseAt = t
     }
 
     // ---------- zone ----------
@@ -286,12 +316,14 @@ export class Practice {
 
     // ---------- mode ----------
     let mode: Mode
-    const coverNow = PP.ttun ? losing || needHeal : (this.retreating || many || outranged) && !closeFight
+    const coverNow = PP.sqLose ? t - this.loseAt < 1.5 && !finishIn : PP.ttun ? losing || needHeal : (this.retreating || many || outranged) && !closeFight
+    const fightCube = PP.sqFightCube > 0 && shootable && cube !== null && cube.d < PP.sqFightCube * (hpFrac <= 0.5 ? 0.57 : 1)
     if (urgent) mode = "zone"
     else if (coverNow && !(PP.econ && cube && cube.d < 12)) mode = "cover"
     else if (mustGo) mode = "zone"
     else if (drop) mode = "drop"
     else if (PP.econ && cube && hpFrac > 0.35) mode = "cube"
+    else if (fightCube) mode = "cube"
     else if (PP.econ && pick && shootable && pick.d < (gunOnly ? 60 : 35)) mode = "loot"
     else if (!PP.econ && cube && hpFrac > 0.35 && threats.length <= 1 && (cube.d < 10 || !shootable || dT > 60)) mode = "cube"
     else if (gunOnly && pick && t - w.lastHurtT > 1.5 && (!shootable || dT > 50 || pick.d < 20)) mode = "loot"
@@ -369,7 +401,7 @@ export class Practice {
         if (pick!.d < 14 && pick!.pos[2] - z > 1.5 && me.energy > 20) this.climbUntil = Math.max(this.climbUntil, t + 0.6)
         break
       case "fight": {
-        mv = this.fightMove(x, y, T!, hasLaser, hasLight, finishing, false, mustGo, nc, nr, t)
+        mv = this.fightMove(x, y, T!, hasLaser, hasLight, finishing, false, mustGo, nc, nr, t, finishIn ? PP.sqFinishR : 0)
         // mid-duel pickups when it is safe enough
         const near = threats.filter((s) => s.d < 90).length
         if (PP.duelPick && hpFrac >= 0.42 && near <= 1) {
@@ -748,12 +780,13 @@ export class Practice {
   }
 
   /** Fixed range per weapon, radial correction plus a lateral strafe that flips at random. */
-  private fightMove(x: number, y: number, T: Seen, hasLaser: boolean, hasLight: boolean, finishing: boolean, charge: boolean, mustGo: boolean, nc: V2, nr: number, t: number): V2 {
+  private fightMove(x: number, y: number, T: Seen, hasLaser: boolean, hasLight: boolean, finishing: boolean, charge: boolean, mustGo: boolean, nc: V2, nr: number, t: number, finishR = 0): V2 {
     const d = T.d
     let pref = hasLaser ? PP.laserRange : hasLight ? PP.lightRange : PP.gunRange
     if (hasLaser && hasLight && d < 60) pref = PP.lightRange
     if (finishing) pref = hasLight ? PP.lightRange : 55
     if (charge) pref = 22
+    if (finishR > 0) pref = finishR
     const ux = (T.e.pos[0] - x) / Math.max(1, d), uy = (T.e.pos[1] - y) / Math.max(1, d)
     const radial = clamp((d - pref) / 30, -1, 1)
     if (t > this.strafeT) {
@@ -930,6 +963,13 @@ export class Practice {
         const ok = ey <= Math.atan2(1.6 * rad, d) + 0.012 && ep <= 1.5 * (Math.atan2(3, d) + 0.004)
         const left = full + (L.stats.hold_s ?? 2) - charge
         fire[iLaser] = !((charge >= full - 0.02 && ok) || (left < 0.25 && !ok) || left < 0.12)
+        if (PP.sqLethal && ok && tr.kind === "mech" && charge >= (L.stats.min_charge ?? 0.15) && charge < full - 0.05) {
+          const cc = this.h.hello.config.cubes
+          const frac = (L.stats.min_frac ?? 0.35) + (1 - (L.stats.min_frac ?? 0.35)) * (charge / full)
+          let dmg = (L.stats.damage ?? 315) * frac * (1 + (cc.damage_per_cube ?? 0.04) * Math.min(me.cubes, cc.stat_cap ?? 10))
+          if (tr.weapons.includes("mortar")) dmg *= 1 + (L.stats.cookoff ?? 0.6)
+          if (dmg * 0.8 >= tr.hp) fire[iLaser] = false
+        }
         laserReady = charge >= full - 0.1
       } else if (L.cooldown <= 0.05 && d < range - 5 && !lightNear && (tr.kind === "mech" || tr.id < 1000 || iGun < 0)) {
         fire[iLaser] = true
