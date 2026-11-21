@@ -183,7 +183,7 @@ func TestParams70c8b23(t *testing.T) {
 	if got := squadParams(DefaultParams()); got != sq {
 		t.Fatalf("squadParams with original tweaks differs from 70c8b23:\n got %+v\nwant %+v", got, sq)
 	}
-	t.Logf("tweaks in use: %+v", tw)
+	t.Logf("tweaks in use: %+v", old)
 }
 
 // TestFreeForAllUnchanged: on the recorded free-for-all match the tweaks in use must play exactly like 70c8b23.
@@ -209,13 +209,14 @@ func TestFreeForAllUnchanged(t *testing.T) {
 }
 
 // TestSquadStream: the same match turned into a practice-like one (nobody else dies, so the squad parameters
-// take over after 20 s; enemy HP scaled down so that the finishing code runs). No panics or bad actions,
-// identical play before the squad switch.
+// take over after 20 s; our HP held at 60 % and enemy HP scaled down so that the lose rule and the finishing
+// code run). No panics or bad actions, identical play before the squad switch.
 func TestSquadStream(t *testing.T) {
 	kit := kitDir(t)
 	s := loadStream(t, kit)
 	edit := func(o *Obs) {
 		o.Alive = 16
+		o.Self.HP = math.Max(o.Self.HP, 0.6*o.Self.MaxHP)
 		for i := range o.Mechs {
 			if o.Mechs[i].Kind == "mech" {
 				o.Mechs[i].HP *= 0.3

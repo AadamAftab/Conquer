@@ -759,7 +759,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 			b.P.GunRange, b.P.LaserRange, b.P.LightRange = b.P.Finish, b.P.Finish, b.P.Finish
 			mx, my = b.fightMove(o, foe, seen, wantLos)
 			b.P = keep
-			if b.P.FinishRush && foe.Dist > 2*b.P.Finish && me.Energy > 30 {
+			if b.P.FinishRush && foe.Dist > 2*b.P.Finish && me.Energy > 30 && me.Grounded {
 				boost = true
 			}
 		} else {
