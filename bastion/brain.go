@@ -1,4 +1,4 @@
-package mech
+package bastion
 
 import (
 	"math"
@@ -1956,23 +1956,21 @@ func squadParams(p Params) Params {
 	p.LaserRange = 120
 	p.LootRadius = 150
 	p.CrateUntil = 1e9
-	p.Stick = 120
-	p.HPw = 0.2
-	p.LowBonus = 100
+	p.Stick = 200
+	p.HPw = 0.18
+	p.LowBonus = 200
 	p.MaxTarget = 240
 	p.LoseRule = true
-	p.FightLoot = 70
+	p.FightLoot = 85
 	p.FarmHP = 0.5
 
 	p.LaserSeek = 240
 	p.LaserUp = true
 	p.Lethal = true
 	p.Finish = 20
-	p.Stick = 200
-	p.LowBonus = 200
-	p.LethalK = 0.7
-	p.HPw = 0.15
-	p.HPw = 0.18
+	p.FinishRush = true
+	p.CubeGoal = 30
+	p.LethalK = 0.75
 
 	return p
 }

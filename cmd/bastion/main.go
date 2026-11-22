@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"mechbot/mech"
+	"apex-bastion/bastion"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 		out.WriteByte('\n')
 		out.Flush()
 	}
-	var brain *mech.Brain
+	var brain *bastion.Brain
 	var probe struct {
 		Type string `json:"type"`
 	}
@@ -64,21 +64,21 @@ func main() {
 			}
 			switch probe.Type {
 			case "hello":
-				var h mech.Hello
+				var h bastion.Hello
 				if err := json.Unmarshal(raw, &h); err != nil {
 					fmt.Fprintln(os.Stderr, "hello:", err)
 				}
 				dir := h.Map.Dir
-				w, err := mech.LoadWorld(dir)
+				w, err := bastion.LoadWorld(dir)
 				if err != nil && dir != "/arena" {
-					w, err = mech.LoadWorld("/arena")
+					w, err = bastion.LoadWorld("/arena")
 				}
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "map:", err, "- playing on a flat map")
-					w = mech.FlatWorld()
+					w = bastion.FlatWorld()
 				}
-				brain = mech.NewBrain(&h, w)
-				send(map[string]string{"type": "ready", "name": "apex-bastion"})
+				brain = bastion.NewBrain(&h, w)
+				send(map[string]string{"type": "ready", "name": "ApexBastion"})
 			case "obs":
 				latest = raw
 			case "end":
@@ -88,13 +88,13 @@ func main() {
 		if latest == nil {
 			continue
 		}
-		var o mech.Obs
+		var o bastion.Obs
 		if err := json.Unmarshal(latest, &o); err != nil || brain == nil {
 			var t struct {
 				Tick int `json:"tick"`
 			}
 			json.Unmarshal(latest, &t)
-			send(mech.Action{Tick: t.Tick})
+			send(bastion.Action{Tick: t.Tick})
 			continue
 		}
 		send(brain.Act(&o))

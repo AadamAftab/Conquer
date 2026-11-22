@@ -1,4 +1,4 @@
-package mech
+package bastion
 
 import (
 	"encoding/binary"
