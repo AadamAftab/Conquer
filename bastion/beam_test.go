@@ -8,6 +8,9 @@ import (
 // A beam fired by a mech we cannot see must create/refresh its track at the beam's muzzle without claiming
 // the mech is visible, and a beam from a mech that is visible this tick must leave its real track alone.
 func TestBeamStampsHiddenShooter(t *testing.T) {
+	if !useExtras {
+		t.Skip("beam tracking is an extra and is switched off")
+	}
 	b := NewBrain(&Hello{}, FlatWorld())
 	o := &Obs{T: 30, Alive: 10}
 	o.Self.Pos = Vec3{0, 0, 0}

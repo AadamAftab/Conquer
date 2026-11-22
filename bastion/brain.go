@@ -280,6 +280,9 @@ func (b *Brain) observe(o *Obs) {
 	// A beam path starts at the shooter's muzzle. If the shooter is out of sight, that is its exact position:
 	// refresh its track (without claiming it is visible) so we can turn to face it before its next shot.
 	for i := range o.Beams {
+		if !useExtras {
+			break
+		}
 		bm := &o.Beams[i]
 		if bm.By < 0 || bm.By >= 100 || len(bm.Path) == 0 {
 			continue
@@ -589,7 +592,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 	_, light := hasWeapon(me.Weapons, "lightning")
 	_, laser := hasWeapon(me.Weapons, "laser")
 	late := z.NextRadius <= 70 || o.Alive <= 3
-	if z.NextRadius <= 70 && now > 20 {
+	if useExtras && z.NextRadius <= 70 && now > 20 {
 		b.P.Ghost = true
 	}
 
@@ -652,7 +655,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 		case aimed && t.Dist < 190:
 			t.Engage = true
 		}
-		if now < 60 && laser == nil && holds(t.Weapons, "laser") && t.Dist > 35 {
+		if useExtras && now < 60 && laser == nil && holds(t.Weapons, "laser") && t.Dist > 35 {
 			t.Engage = false
 		}
 		if t.Engage && !t.LOS && t.Dist < maxT && (hidden == nil || t.Dist < hidden.Dist) {
@@ -1054,15 +1057,26 @@ func (b *Brain) step(o *Obs, act *Action) {
 		var gy, gp float64
 		gunOK := false
 		if gun != nil {
-			leadMult := 1.0
-			if isMech && target != nil && target.Lead != nil {
-				leadMult = target.Lead.Multiplier(now)
+			if useExtras {
+				leadMult := 1.0
+				if isMech && target != nil && target.Lead != nil {
+					leadMult = target.Lead.Multiplier(now)
+				}
+				if isMech && b.pracOn {
+					// friend's 123 recorded matches: gun lead on mechs scaled 0.8 was best
+					leadMult = math.Min(leadMult, 0.8)
+				}
+				gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded, leadMult)
+			} else if isMech && b.pracOn {
+				// v19: the shot leaves t0 s after the observation; the predicted travel is scaled by 0.8
+				t0 := 0.05
+				if gun.Cooldown <= 0.05 {
+					t0 = 0
+				}
+				gy, gp = b.leadK(muzzle, tp, tv, gun.Stats.Speed, grounded, t0, 0.8)
+			} else {
+				gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded, 1.0)
 			}
-			if isMech && b.pracOn {
-				// friend's 123 recorded matches: gun lead on mechs scaled 0.8 was best
-				leadMult = math.Min(leadMult, 0.8)
-			}
-			gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded, leadMult)
 			gunOK = dist <= gun.Stats.Range*0.96
 		}
 
@@ -1305,6 +1319,26 @@ func (b *Brain) wantPickup(me *Self, kind string) bool {
 		cur = rank(me.Weapons[1].Kind)
 	}
 	return rank(kind) > cur
+}
+
+// leadK is the v19 gun lead: the shot leaves t0 s after the observation and covers its first 3 m at once;
+// the target's predicted travel over the time to impact is scaled by k.
+func (b *Brain) leadK(muzzle, tp, tv Vec3, speed float64, grounded bool, t0, k float64) (float64, float64) {
+	if speed <= 0 {
+		speed = 252
+	}
+	t := 0.0
+	var px, py, pz float64
+	for it := 0; it < 4; it++ {
+		tt := k * (t0 + t)
+		px, py, pz = tp[0]+tv[0]*tt, tp[1]+tv[1]*tt, tp[2]
+		if !grounded {
+			pz += tv[2] * tt * 0.5
+		}
+		d := math.Sqrt((px-muzzle[0])*(px-muzzle[0]) + (py-muzzle[1])*(py-muzzle[1]) + (pz-muzzle[2])*(pz-muzzle[2]))
+		t = math.Max(0, d-3) / speed
+	}
+	return math.Atan2(py-muzzle[1], px-muzzle[0]), math.Atan2(pz-muzzle[2], hyp(px-muzzle[0], py-muzzle[1]))
 }
 
 func (b *Brain) lead(muzzle, tp, tv Vec3, speed float64, grounded bool, mult float64) (float64, float64) {
