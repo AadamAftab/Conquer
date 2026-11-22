@@ -216,6 +216,10 @@ pub struct Params {
     pub fc_focus: f64,
     /// with hold_hunter: also hold (never close in) on a hunter in sight
     pub hold_los: f64,
+    /// free-for-all detection: number of foreign-fight signals needed
+    pub ffa_sig_n: f64,
+    /// settings that replace these ones once free-for-all play is detected
+    pub ffa_params: Option<Box<Params>>,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -630,6 +634,8 @@ impl Default for Params {
             drop_save_dist: 200.0,
             fc_focus: 50.0,
             hold_los: 0.0,
+            ffa_sig_n: 3.0,
+            ffa_params: None,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,

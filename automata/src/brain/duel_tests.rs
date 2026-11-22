@@ -133,3 +133,28 @@ fn fast_hunter() {
     assert!(squad.t_close >= old.t_close * 1.5, "model {:.1} s against legacy {:.1} s", squad.t_close, old.t_close);
     assert!(boost.t_close >= squad.t_close - 0.5, "boost {:.1} s against {:.1} s", boost.t_close, squad.t_close);
 }
+
+#[test]
+fn ffa_profile_swap() {
+    let p: Params = serde_json::from_str(r#"{"rest_after_k":5,"ffa_params":{"ffa_on":1,"cube_avoid":10}}"#).expect("params");
+    assert!(p.ffa_params.is_some());
+    let hello = crate::proto::Hello::default();
+    let world = crate::world::World::empty();
+    let shared = Arc::new(Shared { nav: crate::nav::Nav::build(&world, &hello.config.mech), world });
+    let mut brain = Brain::with_params(&hello, shared, p);
+    let mut o = Obs::default();
+    o.tick = 2;
+    o.t = 0.1;
+    let _ = brain.act(&o, &Budget::unlimited());
+    assert_eq!(brain.p.rest_after_k, 5.0);
+    assert_eq!(brain.p.ffa_on, 0.0);
+    brain.ffa.on = true;
+    o.tick = 4;
+    o.t = 0.2;
+    let _ = brain.act(&o, &Budget::unlimited());
+    assert_eq!(brain.p.ffa_on, 1.0);
+    assert_eq!(brain.p.cube_avoid, 10.0);
+    assert_eq!(brain.p.rest_after_k, 0.0);
+    assert_eq!(brain.p.mode_detect, 1.0);
+    assert!(brain.p.ffa_params.is_none());
+}

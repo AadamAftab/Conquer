@@ -46,7 +46,7 @@ impl Ffa {
         }
     }
 
-    pub fn update(&mut self, obs: &Obs, tracks: &[Track], enabled: bool) {
+    pub fn update(&mut self, obs: &Obs, tracks: &[Track], enabled: bool, sig_n: u32) {
         let t = obs.t;
         let me = &obs.me;
         if self.alive0 <= 0 {
@@ -125,7 +125,7 @@ impl Ffa {
         if self.seen_hp.len() > 32 {
             self.seen_hp.remove(0);
         }
-        if self.sig >= 3 {
+        if self.sig >= sig_n.max(1) {
             self.set(t, 2);
         }
     }
