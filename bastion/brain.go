@@ -745,7 +745,16 @@ func (b *Brain) step(o *Obs, act *Action) {
 		if losing {
 			b.loseAt = now
 		}
-		b.retreat = now-b.loseAt < 1.5 && b.loseAt > 0
+		if useRetreatHold {
+			// stay in retreat (cover, no re-engaging) until regenerated: 5 s without damage, then 45 HP/s
+			if losing {
+				b.retreat = true
+			} else if b.retreat && (hpFrac >= 0.78 || now-b.loseAt > 12) {
+				b.retreat = false
+			}
+		} else {
+			b.retreat = now-b.loseAt < 1.5 && b.loseAt > 0
+		}
 	}
 
 	exposed := false
@@ -1580,6 +1589,10 @@ func (b *Brain) fightMove(o *Obs, tg *Track, seen []*Track, wantLos float64) (fl
 			}
 		}
 		body := Vec3{cx, cy, cz + me.Stats.Height*0.6}
+		if useTreeSnipe && los && wantLos > 0 && !b.W.LineOfSight(b.eye(tg), body) {
+			// they cannot see us here (trunk or dense crown between), but trees do not stop our shots
+			s += 25
+		}
 		for _, e := range seen {
 			if e == tg || hyp(e.Pos[0]-cx, e.Pos[1]-cy) > 170 {
 				continue

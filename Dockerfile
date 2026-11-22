@@ -3,6 +3,7 @@ WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 COPY go.mod ./
 COPY bastion ./bastion
+COPY apex ./apex
 COPY cmd/bastion ./cmd/bastion
 RUN go build -trimpath -ldflags="-s -w" -o /apex-bastion ./cmd/bastion
 

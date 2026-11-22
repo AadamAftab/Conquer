@@ -9,7 +9,15 @@ import (
 	"apex-bastion/bastion"
 )
 
+// useApex selects the engine in apex/.
+// false = run our own bastion engine below, which is kept unchanged.
+const useApex = true
+
 func main() {
+	if useApex {
+		runApex()
+		return
+	}
 	lines := make(chan []byte, 256)
 	go func() {
 		r := bufio.NewReaderSize(os.Stdin, 1<<20)
