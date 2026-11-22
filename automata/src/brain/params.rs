@@ -218,6 +218,8 @@ pub struct Params {
     pub hold_los: f64,
     /// free-for-all detection: number of foreign-fight signals needed
     pub ffa_sig_n: f64,
+    /// free-for-all detection: deaths not caused by us before 75 s
+    pub ffa_death_n: f64,
     /// settings that replace these ones once free-for-all play is detected
     pub ffa_params: Option<Box<Params>>,
     pub w_cube_avoid: f64,
@@ -635,6 +637,7 @@ impl Default for Params {
             fc_focus: 50.0,
             hold_los: 0.0,
             ffa_sig_n: 3.0,
+            ffa_death_n: 2.0,
             ffa_params: None,
             w_cube_avoid: 30.0,
             gear_on: 0.0,

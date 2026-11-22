@@ -46,7 +46,7 @@ impl Ffa {
         }
     }
 
-    pub fn update(&mut self, obs: &Obs, tracks: &[Track], enabled: bool, sig_n: u32) {
+    pub fn update(&mut self, obs: &Obs, tracks: &[Track], enabled: bool, sig_n: u32, death_n: i64) {
         let t = obs.t;
         let me = &obs.me;
         if self.alive0 <= 0 {
@@ -72,7 +72,7 @@ impl Ffa {
             return;
         }
         let deaths = self.alive0 - obs.alive;
-        if t < 75.0 && deaths >= self.kills + 2 {
+        if t < 75.0 && deaths >= self.kills + death_n.max(1) {
             self.set(t, 1);
         }
         let is_npc = |id: i64| tracks.iter().any(|tr| tr.id == id && tr.kind == ActorKind::Npc) || obs.mechs.iter().any(|m| m.id == id && m.kind == ActorKind::Npc);

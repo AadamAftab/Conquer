@@ -234,7 +234,7 @@ impl Brain {
             self.cad.update(obs, self.p.cad_period, self.p.cad_snap);
         }
         self.wave_update(obs, world, nav);
-        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5, self.p.ffa_sig_n.max(1.0) as u32);
+        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5, self.p.ffa_sig_n.max(1.0) as u32, self.p.ffa_death_n.max(1.0) as i64);
         if self.ffa.on && !self.ffa_swapped {
             self.ffa_swapped = true;
             if let Some(fp) = self.p.ffa_params.clone() {
