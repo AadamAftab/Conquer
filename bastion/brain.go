@@ -24,6 +24,7 @@ type Track struct {
 	Closing float64
 	Engage  bool
 	Lead    *LeadTracker
+	BeamAt  float64 // last time a beam revealed this mech's position while it was out of sight
 }
 
 type known struct {
@@ -254,7 +255,7 @@ func (b *Brain) observe(o *Obs) {
 		}
 		t := tab[m.ID]
 		if t == nil {
-			t = &Track{HitMe: -100}
+			t = &Track{HitMe: -100, BeamAt: -100}
 			tab[m.ID] = t
 		}
 		t.MechSeen = *m
@@ -273,6 +274,35 @@ func (b *Brain) observe(o *Obs) {
 		}
 		if t.Dist > 1 {
 			t.Closing = -((m.Vel[0]-me.Vel[0])*dx + (m.Vel[1]-me.Vel[1])*dy) / t.Dist
+		}
+	}
+	// A beam path starts at the shooter's muzzle. If the shooter is out of sight, that is its exact position:
+	// refresh its track (without claiming it is visible) so we can turn to face it before its next shot.
+	for i := range o.Beams {
+		bm := &o.Beams[i]
+		if bm.By < 0 || bm.By >= 100 || len(bm.Path) == 0 {
+			continue
+		}
+		t := b.tracks[bm.By]
+		if t != nil && t.Seen == now {
+			continue
+		}
+		p0 := bm.Path[0]
+		foot := Vec3{p0[0], p0[1], p0[2] - me.Stats.MuzzleHeight}
+		if t == nil {
+			t = &Track{HitMe: -100, BeamAt: -100}
+			t.MechSeen = MechSeen{ID: bm.By, Kind: "mech", HP: me.MaxHP, MaxHP: me.MaxHP, Weapons: []string{bm.Kind}}
+			b.tracks[bm.By] = t
+		}
+		t.Pos = foot
+		t.Vel = Vec3{}
+		t.Seen = now - math.Min(math.Max(bm.Age, 0), 0.5)
+		t.BeamAt = now
+		t.LOS = false
+		t.Dist = hyp(foot[0]-me.Pos[0], foot[1]-me.Pos[1])
+		if len(bm.Path) > 1 {
+			p1 := bm.Path[1]
+			t.Aim[0] = math.Atan2(p1[1]-p0[1], p1[0]-p0[0])
 		}
 	}
 	for id, t := range b.tracks {
@@ -1145,9 +1175,17 @@ func (b *Brain) step(o *Obs, act *Action) {
 				}
 			}
 		}
+		var beamShooter *Track
+		for _, t := range seen {
+			if t.Seen != now && now-t.BeamAt < 1.5 && (beamShooter == nil || t.Dist < beamShooter.Dist) {
+				beamShooter = t
+			}
+		}
 		switch {
 		case watch != nil:
 			aim[0] = math.Atan2(watch.Pos[1]-y, watch.Pos[0]-x)
+		case beamShooter != nil:
+			aim[0] = math.Atan2(beamShooter.Pos[1]-y, beamShooter.Pos[0]-x)
 		case b.npcHurt > 0 && now-b.npcHurt < 2.5:
 			aim[0] = b.npcBearing
 		case now-b.lastHurt < 2.5:

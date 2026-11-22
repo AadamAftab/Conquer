@@ -229,6 +229,14 @@ type Sound struct {
 	Age     float64 `json:"age"`
 }
 
+// Beam is a laser or lightning arc fired by another mech that we could see; Path[0] is the shooter's muzzle.
+type Beam struct {
+	By   int     `json:"by"`
+	Kind string  `json:"kind"`
+	Path []Vec3  `json:"path"`
+	Age  float64 `json:"age"`
+}
+
 type Event struct {
 	Type    string          `json:"type"`
 	Amount  float64         `json:"amount,omitempty"`
@@ -288,6 +296,7 @@ type Obs struct {
 	Cubes       []Item     `json:"cubes"`
 	Pickups     []Item     `json:"pickups"`
 	Sounds      []Sound    `json:"sounds"`
+	Beams       []Beam     `json:"beams"`
 	Events      []Event    `json:"events"`
 	Drops       []Drop     `json:"drops"`
 	Zone        Zone       `json:"zone"`
