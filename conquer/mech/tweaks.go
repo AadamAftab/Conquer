@@ -66,18 +66,57 @@ const (
 	tweakHPw      = 0.0
 	tweakLowBonus = 0.0
 	tweakLethalK  = 0.0
+
+	// End game (practice only).
+	// tweakCautiousT: time (s) from which squad mode gives way to the cautious free-for-all parameters for the rest of
+	// the match, exactly as a house bot dying without us already does (0 = original: only such a death switches).
+	// Keeping squad mode after such late deaths (tweakFFAUntil 60) cost about 0.35, so the cautious mode is used late
+	// even in matches where no house bot has died. 265 s is when conquer's own "late" starts (next zone radius 70 m).
+	tweakCautiousT = 0.0
+	// tweakFinalHold: in the last shrink (radius 25 -> 0 m, 390-415 s, 260 HP/s outside), stay within a tolerance of
+	// its end point that shrinks with the circle (original: anywhere within 2 m once the zone deadline is near).
+	// The end point is the only spot inside until 415 s; each metre off it in the outward direction is up to
+	// 25/(25-L) s earlier outside (L = distance the centre still moves), i.e. several hundred HP, and survivors are
+	// then ranked by the order the zone kills them. It holds only in matches confirmed as practice (squad mode on
+	// after 60 s; in free-for-all a death we did not cause always ends squad mode before about 37 s).
+	tweakFinalHold = false
+	// tweakLeadK: squad mode only, gun lead on mechs. A gun shot leaves on the first tick after the decision when
+	// the cooldown is at most one tick (else on the second) and covers its first 3 m at once, so the bullet reaches
+	// a target d m away (d-3)/speed s after leaving (original: always 0.075 s more). Fighting house bots
+	// strafe and turn back, so they cover only part of v*T: the predicted travel is scaled by this factor
+	// (0 = original lead; in 123 recorded matches 0.8 best centres bullets on them 0.3-0.6 s ahead).
+	tweakLeadK = 0.0
+	// tweakLaserSlew: squad mode only. The torso turns before the beam leaves on the first tick after the release,
+	// so the release and lethal checks allow one tick of turn; the beam leads its target by that tick
+	// (original: 0.125 s); while charging, the aim stays on the gun lead (original: the laser line from 45 % charge
+	// on), and gun shots whose bullet would follow the laser line off the gun lead are held.
+	tweakLaserSlew = false
+
+	// Free-for-all (outside squad mode).
+	// tweakFFASeek: in the first tweakFFASeekT seconds, without a laser or lightning, fetch one up to this distance (m)
+	// instead of the loot radius (90 m in free-for-all). In 127 recorded free-for-all matches, with the nearest ground
+	// laser/lightning 90-150 m from spawn, conquer-based bots held one at 60 s in 35 % of matches against 61-71 % for the
+	// best bots, and a held special weapon at 60 s went with about +3 to +4 points (0 = original).
+	tweakFFASeek  = 0.0
+	tweakFFASeekT = 60.0
 )
+
+// pracSureT: squad mode still on at this time (s) confirms a practice match (see tweakFFAUntil).
+const pracSureT = 60.0
 
 type tweakSet struct {
 	hopT, loseK, squadT float64
 	finish, finishHP    float64
 	finishRush          bool
 	pursue, stick       float64
+	cautiousT           float64
+	finalHold           bool
 }
 
 // originalTweaks is the 70c8b23 behaviour.
 func originalTweaks() tweakSet {
-	return tweakSet{hopT: 0, loseK: 1, squadT: 20, finish: 14, finishHP: 0, finishRush: false, pursue: 1.01, stick: 120}
+	return tweakSet{hopT: 0, loseK: 1, squadT: 20, finish: 14, finishHP: 0, finishRush: false, pursue: 1.01, stick: 120,
+		cautiousT: 0, finalHold: false}
 }
 
 // tw holds the tweaks in use (a variable so that tests can compare against originalTweaks).
@@ -85,4 +124,5 @@ var tw = tweakSet{
 	hopT: tweakHopT, loseK: tweakLoseK, squadT: tweakSquadT,
 	finish: tweakFinish, finishHP: tweakFinishHP, finishRush: tweakFinishRush,
 	pursue: tweakPursue, stick: tweakStick,
+	cautiousT: tweakCautiousT, finalHold: tweakFinalHold,
 }
