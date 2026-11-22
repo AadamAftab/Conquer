@@ -9,6 +9,7 @@ FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f0
 COPY --from=build --chmod=0755 /automata /usr/local/bin/automata
 COPY --chmod=0644 automata/bot.json /bot.json
 ENV MECH_PARAMS=/bot.json
+ENV MECH_LOG=1
 USER 65534:65534
 WORKDIR /tmp
 ENTRYPOINT ["/usr/local/bin/automata"]
