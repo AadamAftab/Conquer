@@ -186,3 +186,21 @@ fn ffa_detect_on_stream() {
         }
     }
 }
+
+#[test]
+fn ffa_clock_gate() {
+    let past: Params = serde_json::from_str(r#"{"ffa_after_unix":1,"ffa_params":{"ffa_on":1}}"#).expect("params");
+    let future: Params = serde_json::from_str(r#"{"ffa_after_unix":99999999999,"ffa_params":{"ffa_on":1}}"#).expect("params");
+    let hello = crate::proto::Hello::default();
+    for (p, want) in [(past, true), (future, false)] {
+        let world = crate::world::World::empty();
+        let shared = Arc::new(Shared { nav: crate::nav::Nav::build(&world, &hello.config.mech), world });
+        let mut brain = Brain::with_params(&hello, shared, p);
+        let mut o = Obs::default();
+        o.tick = 2;
+        o.t = 0.1;
+        let _ = brain.act(&o, &Budget::unlimited());
+        assert_eq!(brain.ffa.on, want);
+        assert_eq!(brain.p.ffa_on > 0.5, want);
+    }
+}
