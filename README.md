@@ -1,6 +1,6 @@
 # mech-royale-bot
 
-Bot for the Builders Buildathon "Mech Royale" track (protocol `mechfight/1`), team "not even close".
+Bot for the Builders Buildathon "Mech Royale" track (protocol `mechfight/1`), team "Soloing".
 
 ## What runs
 
