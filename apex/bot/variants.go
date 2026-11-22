@@ -1181,6 +1181,7 @@ var huntSweep = map[string]func(p *Params){
 	"fF": func(p *Params) {
 		p.KeepAway, p.KeepAwayMem, p.KeepAwayStay = 800, 20, 20
 		p.HealFirst, p.HealUntil = 0.8, 0.97
+		p.LightningValue = 9.0
 	},
 }
 
