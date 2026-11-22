@@ -1,0 +1,41 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - file: Dockerfile
+            tag: automata
+          - file: Dockerfile.conquer
+            tag: conquer
+          - file: Dockerfile.ts
+            tag: ts
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f ${{ matrix.file }} -t ${{ matrix.tag }} .
+
+  rust-tests:
+    runs-on: ubuntu-latest
+    container: rust:1.95
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release --locked
+        working-directory: automata
+
+  go-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+      - run: go vet ./... && go test ./mech/
+        working-directory: conquer
