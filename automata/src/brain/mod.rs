@@ -234,6 +234,13 @@ impl Brain {
             self.cad.update(obs, self.p.cad_period, self.p.cad_snap);
         }
         self.wave_update(obs, world, nav);
+        if self.p.ffa_after_unix > 0.0 && !self.ffa.on {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            if now >= self.p.ffa_after_unix {
+                // past the practice cutoff every match is a free-for-all
+                self.ffa.force(obs.t);
+            }
+        }
         self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5, self.p.ffa_sig_n.max(1.0) as u32, self.p.ffa_death_n.max(1.0) as i64);
         if self.ffa.on && !self.ffa_swapped {
             self.ffa_swapped = true;

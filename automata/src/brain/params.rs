@@ -220,6 +220,8 @@ pub struct Params {
     pub ffa_sig_n: f64,
     /// free-for-all detection: deaths not caused by us before 75 s
     pub ffa_death_n: f64,
+    /// unix time after which every match is treated as free-for-all from the start (0 = off)
+    pub ffa_after_unix: f64,
     /// settings that replace these ones once free-for-all play is detected
     pub ffa_params: Option<Box<Params>>,
     pub w_cube_avoid: f64,
@@ -638,6 +640,7 @@ impl Default for Params {
             hold_los: 0.0,
             ffa_sig_n: 3.0,
             ffa_death_n: 2.0,
+            ffa_after_unix: 0.0,
             ffa_params: None,
             w_cube_avoid: 30.0,
             gear_on: 0.0,

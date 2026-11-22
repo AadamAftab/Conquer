@@ -35,6 +35,11 @@ impl Ffa {
         }
     }
 
+    /// Free-for-all known from outside the match (wall clock past the practice cutoff).
+    pub fn force(&mut self, t: f64) {
+        self.set(t, 3);
+    }
+
     fn set(&mut self, t: f64, why: u8) {
         if !self.on {
             self.on = true;
