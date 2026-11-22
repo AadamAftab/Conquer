@@ -1177,7 +1177,10 @@ var huntSweep = map[string]func(p *Params){
 	"fB": func(p *Params) { fort(p); p.Hunt = false; p.NoFarm = true },
 	"fC": func(p *Params) { fort(p); p.Hunt = false; stand(p) },
 	"fD": func(p *Params) { fort(p); p.HuntRange, p.HuntRangeLaser = 70, 90 },
-	"fE": func(p *Params) { p.KeepAway, p.KeepAwayMem, p.KeepAwayStay = 800, 20, 20 },
+	"fE": func(p *Params) {
+		p.KeepAway, p.KeepAwayMem, p.KeepAwayStay = 800, 20, 20
+		p.HouseModel = true
+	},
 	"fF": func(p *Params) {
 		p.KeepAway, p.KeepAwayMem, p.KeepAwayStay = 800, 20, 20
 		p.HealFirst, p.HealUntil = 0.8, 0.97
