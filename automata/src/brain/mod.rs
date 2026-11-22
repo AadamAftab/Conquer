@@ -124,6 +124,7 @@ pub struct Brain {
     pub(crate) pk: laser::Peek,
     pub(crate) lz_tid: i64,
     pub(crate) tele: tele::Tele,
+    pub(crate) ffa_swapped: bool,
     pub(crate) aimz: aimz::AimZ,
     pub(crate) cad: aimz::Cadence,
     pub(crate) cad_until: f64,
@@ -203,6 +204,7 @@ impl Brain {
             pk: laser::Peek::new(),
             lz_tid: -1,
             tele: tele::Tele::default(),
+            ffa_swapped: false,
             aimz: aimz::AimZ::new(),
             cad: aimz::Cadence::new(),
             cad_until: -1.0,
@@ -232,7 +234,17 @@ impl Brain {
             self.cad.update(obs, self.p.cad_period, self.p.cad_snap);
         }
         self.wave_update(obs, world, nav);
-        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5);
+        self.ffa.update(obs, &self.mem.tracks, self.p.ffa_on > 0.5 || self.p.mode_detect > 0.5, self.p.ffa_sig_n.max(1.0) as u32, self.p.ffa_death_n.max(1.0) as i64);
+        if self.ffa.on && !self.ffa_swapped {
+            self.ffa_swapped = true;
+            if let Some(fp) = self.p.ffa_params.clone() {
+                // free-for-all detected: switch to the free-for-all settings, keeping detection on
+                let mut np = *fp;
+                np.mode_detect = 1.0;
+                np.ffa_params = None;
+                self.p = Arc::new(np);
+            }
+        }
         self.order.update(obs);
         self.tele_update(obs);
         if self.p.halt_multi >= 1.0 && !self.order.halted && self.order.on_us(obs.t) as f64 >= self.p.halt_multi {

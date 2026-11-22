@@ -212,6 +212,16 @@ pub struct Params {
     /// at or above this health with the cube limit reached (squad play), leave a supply drop for later and wait next to it
     pub drop_save: f64,
     pub drop_save_dist: f64,
+    /// fire-control weight of the chosen target over other visible mechs
+    pub fc_focus: f64,
+    /// with hold_hunter: also hold (never close in) on a hunter in sight
+    pub hold_los: f64,
+    /// free-for-all detection: number of foreign-fight signals needed
+    pub ffa_sig_n: f64,
+    /// free-for-all detection: deaths not caused by us before 75 s
+    pub ffa_death_n: f64,
+    /// settings that replace these ones once free-for-all play is detected
+    pub ffa_params: Option<Box<Params>>,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -624,6 +634,11 @@ impl Default for Params {
             prep_open: 0.0,
             drop_save: 0.0,
             drop_save_dist: 200.0,
+            fc_focus: 50.0,
+            hold_los: 0.0,
+            ffa_sig_n: 3.0,
+            ffa_death_n: 2.0,
+            ffa_params: None,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
