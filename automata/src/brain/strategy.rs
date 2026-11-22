@@ -214,6 +214,18 @@ impl Brain {
             }
         }
 
+        if let Some(tr) = &tgt {
+            if p.adv_leave > 0.0 || p.adv_stay > 0.0 {
+                let adv = self.exchange_adv(obs, tr);
+                if !was && !want_retreat && p.adv_leave > 0.0 && adv < p.adv_leave && hpf <= p.adv_hp && t - self.mem.last_damage_t < 3.0 {
+                    want_retreat = true;
+                }
+                if !was && want_retreat && p.adv_stay > 0.0 && adv >= p.adv_stay && n_att <= 1 {
+                    want_retreat = false;
+                }
+            }
+        }
+
         if held && (n_att >= 1 || near_mech < 120.0 || near_mem < 100.0 || t - self.mem.last_damage_t < 3.0 || (was && near_mem < 170.0)) {
             want_retreat = true;
         }
@@ -452,6 +464,33 @@ impl Brain {
         } else {
             legacy
         }
+    }
+
+    /// Who wins the fight with the target as it stands: (time they need to kill us) / (time we need to kill them),
+    /// counting the other mechs that are shooting at us. Above 1 favours us.
+    fn exchange_adv(&self, obs: &Obs, tr: &Track) -> f64 {
+        let me = &obs.me;
+        let t = obs.t;
+        let has = |k: WeaponKind| me.weapons.iter().flatten().any(|w| w.kind == k);
+        let us = Loadout { gun: has(WeaponKind::Gun), laser: has(WeaponKind::Laser), lightning: has(WeaponKind::Lightning) && me.energy > 20.0 };
+        let of = |x: &Track| Loadout { gun: x.has(WeaponKind::Gun) || x.weapons.is_empty(), laser: x.has(WeaponKind::Laser), lightning: x.has(WeaponKind::Lightning) };
+        let d = dist(tr.pos_at(t), me.pos);
+        let squad = self.squad_mode();
+        let out = duel::outgoing(us, d);
+        let mut inc = duel::incoming(of(tr), squad, d);
+        for x in &self.mem.tracks {
+            if x.kind == ActorKind::Mech && x.id != tr.id && t - x.last_dmg_t < 2.0 {
+                inc += duel::incoming(of(x), squad, dist(x.pos_at(t), me.pos));
+            }
+        }
+        if out < 1.0 {
+            return 0.0;
+        }
+        if inc < 1.0 {
+            return 10.0;
+        }
+        let their_hp = if tr.hp > 0.0 { tr.hp } else { tr.max_hp.max(1.0) };
+        ((me.hp / inc) / (their_hp / out)).min(10.0)
     }
 
     /// The target is coming for us and we can wait for it with a laser instead of walking up to it.

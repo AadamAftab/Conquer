@@ -90,6 +90,12 @@ pub struct Params {
     pub idle_frac: f64,
     // strategy
     pub retreat_hp: f64,
+    /// fight-or-leave by who wins the exchange: leave a fight whose expected outcome (their time to kill us over our time to kill them) is below this (0 = off)
+    pub adv_leave: f64,
+    /// ... only while our health fraction is at or below this
+    pub adv_hp: f64,
+    /// stay in a one-on-one whose outcome is at or above this even if the health rule says retreat (0 = off)
+    pub adv_stay: f64,
     pub retreat_exit_hp: f64,
     pub retreat_multi_hp: f64,
     pub retreat_press_hp: f64,
@@ -475,6 +481,9 @@ impl Default for Params {
             final_radius: 30.0,
             idle_frac: 0.5,
             retreat_hp: 0.38,
+            adv_leave: 0.0,
+            adv_hp: 1.0,
+            adv_stay: 0.0,
             retreat_exit_hp: 0.8,
             retreat_multi_hp: 0.65,
             retreat_press_hp: 0.75,
