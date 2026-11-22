@@ -212,6 +212,8 @@ pub struct Params {
     /// at or above this health with the cube limit reached (squad play), leave a supply drop for later and wait next to it
     pub drop_save: f64,
     pub drop_save_dist: f64,
+    /// fire-control weight of the chosen target over other visible mechs
+    pub fc_focus: f64,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -624,6 +626,7 @@ impl Default for Params {
             prep_open: 0.0,
             drop_save: 0.0,
             drop_save_dist: 200.0,
+            fc_focus: 50.0,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
