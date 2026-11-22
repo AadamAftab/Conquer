@@ -158,3 +158,31 @@ fn ffa_profile_swap() {
     assert_eq!(brain.p.mode_detect, 1.0);
     assert!(brain.p.ffa_params.is_none());
 }
+
+#[test]
+#[ignore]
+fn ffa_detect_on_stream() {
+    let Ok(path) = std::env::var("MECH_STREAM") else { return };
+    let Ok(pp) = std::env::var("MECH_PARAMS_TEST") else { return };
+    let p: Params = serde_json::from_str(&std::fs::read_to_string(pp).unwrap()).unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    let world = crate::world::World::empty();
+    let mut brain: Option<Brain> = None;
+    for l in text.lines() {
+        match serde_json::from_str::<crate::proto::ServerMsg>(l) {
+            Ok(crate::proto::ServerMsg::Hello(h)) => {
+                let shared = Arc::new(Shared { nav: crate::nav::Nav::build(&world, &h.config.mech), world: crate::world::World::empty() });
+                brain = Some(Brain::with_params(&h, shared, p.clone()));
+            }
+            Ok(crate::proto::ServerMsg::Obs(o)) => {
+                let b = brain.as_mut().unwrap();
+                let _ = b.act(&o, &Budget::unlimited());
+                if (o.tick % 40) == 0 || b.ffa.on {
+                    eprintln!("t={:.1} alive={} ffa_on={} p.ffa_on={} mode_detect={}", o.t, o.alive, b.ffa.on, b.p.ffa_on, b.p.mode_detect);
+                    if b.ffa.on { break; }
+                }
+            }
+            _ => {}
+        }
+    }
+}
