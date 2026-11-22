@@ -16,6 +16,7 @@ type Track struct {
 	LOS     bool
 	Closing float64
 	Engage  bool
+	Lead    *LeadTracker
 }
 
 type known struct {
@@ -250,6 +251,10 @@ func (b *Brain) observe(o *Obs) {
 		}
 		t.MechSeen = *m
 		t.Seen = now
+		if t.Lead == nil {
+			t.Lead = NewLeadTracker()
+		}
+		t.Lead.Record(now, m.Pos[0], m.Pos[1], m.Vel[0], m.Vel[1])
 		dx, dy := m.Pos[0]-me.Pos[0], m.Pos[1]-me.Pos[1]
 		t.Dist = hyp(dx, dy)
 		c := b.center(t)
@@ -511,6 +516,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 	_, light := hasWeapon(me.Weapons, "lightning")
 	_, laser := hasWeapon(me.Weapons, "laser")
 	late := z.NextRadius <= 70 || o.Alive <= 3
+	if z.NextRadius <= 70 && now > 20 {
+		b.P.Ghost = true
+	}
 
 	var seen []*Track
 	var target, hidden, shy *Track
@@ -570,6 +578,9 @@ func (b *Brain) step(o *Obs, act *Action) {
 			t.Engage = true
 		case aimed && t.Dist < 190:
 			t.Engage = true
+		}
+		if now < 60 && laser == nil && holds(t.Weapons, "laser") && t.Dist > 35 {
+			t.Engage = false
 		}
 		if t.Engage && !t.LOS && t.Dist < maxT && (hidden == nil || t.Dist < hidden.Dist) {
 			hidden = t
@@ -678,6 +689,7 @@ func (b *Brain) step(o *Obs, act *Action) {
 	mode := "idle"
 	var farm *Track
 	var farmPos *Vec3
+	isRegenerating := hpFrac < 0.90 && now-b.lastHurt > 5.0 && len(seen) == 0
 
 	zgx, zgy := b.zoneGoal(z, x, y)
 	zdist := hyp(zgx-x, zgy-y)
@@ -801,6 +813,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 			mode = "loot:" + lc.kind
 			switch lc.kind {
 			case "npc":
+				if isRegenerating {
+					mx, my = b.travel(me, zgx, zgy)
+					break
+				}
 				t := b.npcs[lc.id]
 				if t != nil && now-t.Seen < 1 && t.LOS && t.Dist < 75 {
 					farm = t
@@ -809,6 +825,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 					mx, my = b.travel(me, lc.pos[0], lc.pos[1])
 				}
 			case "crate":
+				if isRegenerating {
+					mx, my = b.travel(me, zgx, zgy)
+					break
+				}
 				d := hyp(lc.pos[0]-x, lc.pos[1]-y)
 				cp := Vec3{lc.pos[0], lc.pos[1], lc.pos[2] + b.Cfg.Crates.Height*0.5}
 				if d < 50 && b.W.Clear(Vec3{x, y, zf + st.MuzzleHeight}, cp) {
@@ -961,7 +981,11 @@ func (b *Brain) step(o *Obs, act *Action) {
 		var gy, gp float64
 		gunOK := false
 		if gun != nil {
-			gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded)
+			leadMult := 1.0
+			if isMech && target != nil && target.Lead != nil {
+				leadMult = target.Lead.Multiplier(now)
+			}
+			gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded, leadMult)
 			gunOK = dist <= gun.Stats.Range*0.96
 		}
 
@@ -1198,14 +1222,14 @@ func (b *Brain) wantPickup(me *Self, kind string) bool {
 	return rank(kind) > cur
 }
 
-func (b *Brain) lead(muzzle, tp, tv Vec3, speed float64, grounded bool) (float64, float64) {
+func (b *Brain) lead(muzzle, tp, tv Vec3, speed float64, grounded bool, mult float64) (float64, float64) {
 	if speed <= 0 {
 		speed = 252
 	}
 	t := 0.0
 	var px, py, pz float64
 	for k := 0; k < 4; k++ {
-		tt := lat + t
+		tt := (lat + t) * mult
 		px, py, pz = tp[0]+tv[0]*tt, tp[1]+tv[1]*tt, tp[2]
 		if !grounded {
 			pz += tv[2] * tt * 0.5
@@ -1969,7 +1993,7 @@ func squadParams(p Params) Params {
 	p.Lethal = true
 	p.Finish = 20
 	p.FinishRush = true
-	p.CubeGoal = 30
+	p.CubeGoal = 10
 	p.LethalK = 0.75
 
 	return p
