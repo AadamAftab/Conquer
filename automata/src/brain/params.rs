@@ -209,6 +209,9 @@ pub struct Params {
     pub cube_avoid: f64,
     /// with prep_pos: wait at the spot with the most long sight lines instead of the least exposed one
     pub prep_open: f64,
+    /// at or above this health with the cube limit reached (squad play), leave a supply drop for later and wait next to it
+    pub drop_save: f64,
+    pub drop_save_dist: f64,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -619,6 +622,8 @@ impl Default for Params {
             ready_wait: 30.0,
             cube_avoid: 0.0,
             prep_open: 0.0,
+            drop_save: 0.0,
+            drop_save_dist: 200.0,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,

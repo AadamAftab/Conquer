@@ -233,6 +233,7 @@ impl Brain {
         }
         let drop = self.choose_drop(obs, &zi).filter(|_| !held || near_mem > 100.0);
         let z = &obs.zone;
+        let save_drop = p.drop_save > 0.0 && hpf >= p.drop_save && me.cubes >= self.cube_cap() && self.squad_mode();
         let endgame = held && z.next_radius <= 0.5 && z.shrink_end - t < 40.0;
         let mut mode;
         let mut goal;
@@ -274,9 +275,13 @@ impl Brain {
             mode = Mode::Loot;
             goal = Goal::Nav { pos: l.pos, arrive: 1.2 };
             goal_id = l.id;
-        } else if let Some(d) = drop.filter(|d| tgt.is_none() || d.2 < 50.0 || hpf < 0.6 || gear_drop) {
+        } else if let Some(d) = drop.filter(|d| (tgt.is_none() || d.2 < 50.0 || hpf < 0.6 || gear_drop) && !save_drop) {
             mode = Mode::Drop;
             goal = Goal::Nav { pos: d.0, arrive: (d.1 * 0.3).max(1.0) };
+        } else if let Some(d) = drop.filter(|d| save_drop && tgt.is_none() && d.2 < p.drop_save_dist) {
+            // full and capped: keep the repair for later and wait next to the ring instead of taking it now
+            mode = Mode::Idle;
+            goal = Goal::Nav { pos: d.0, arrive: d.1 + 6.0 };
         } else if let Some(tr) = tgt.as_ref().filter(|_| !farm || self.choose_hunt(obs, world, &zi, hpf, hunt_near, muzzle).is_none()) {
             mode = Mode::Fight;
             let tp = tr.pos_at(t);
