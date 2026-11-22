@@ -214,6 +214,8 @@ pub struct Params {
     pub drop_save_dist: f64,
     /// fire-control weight of the chosen target over other visible mechs
     pub fc_focus: f64,
+    /// with hold_hunter: also hold (never close in) on a hunter in sight
+    pub hold_los: f64,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -627,6 +629,7 @@ impl Default for Params {
             drop_save: 0.0,
             drop_save_dist: 200.0,
             fc_focus: 50.0,
+            hold_los: 0.0,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
