@@ -207,6 +207,8 @@ pub struct Params {
     pub ready_wait: f64,
     /// at this many cubes or more, stop collecting and step around cubes (each one only makes the mech bigger)
     pub cube_avoid: f64,
+    /// with prep_pos: wait at the spot with the most long sight lines instead of the least exposed one
+    pub prep_open: f64,
     pub w_cube_avoid: f64,
     pub finish_hp: f64,
     pub finish_bonus: f64,
@@ -616,6 +618,7 @@ impl Default for Params {
             ready_once: 0.0,
             ready_wait: 30.0,
             cube_avoid: 0.0,
+            prep_open: 0.0,
             w_cube_avoid: 30.0,
             gear_on: 0.0,
             gear_harmless_dmg: 150.0,
