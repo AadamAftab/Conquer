@@ -8,6 +8,13 @@ import (
 
 const lat = 0.075
 
+const (
+	pracSureT = 60.0  // squad mode still on at this time: certainly a practice match
+	cautiousT = 265.0 // late in practice, switch to the cautious free-for-all parameters
+	seekRad   = 150.0 // free-for-all opening: fetch a laser or lightning up to this far away
+	seekT     = 60.0  // ... during this many seconds
+)
+
 type Track struct {
 	MechSeen
 	Seen    float64
@@ -93,6 +100,7 @@ type Brain struct {
 	npcHurt            float64
 	npcBearing         float64
 	notPractice        bool
+	pracSure           bool // squad mode was on after pracSureT: a practice match
 	startAlive, kills  int
 	otherDead          int
 	stickID            int
@@ -337,6 +345,13 @@ func (b *Brain) observe(o *Obs) {
 	if b.otherDead >= 5 {
 		b.notPractice = true
 	}
+	if b.pracOn && now >= pracSureT {
+		b.pracSure = true
+	}
+	if b.pracOn && now >= cautiousT {
+		// late in practice: keeping squad mode cost about 0.35 in the friend's recorded matches
+		b.notPractice = true
+	}
 	if on := b.base.Practice && !b.notPractice && now > 20; on != b.pracOn {
 		b.pracOn = on
 		b.P = b.base
@@ -407,6 +422,33 @@ func (b *Brain) zonePenalty(z *Zone, x, y float64) float64 {
 		p += soon * (25 + 0.8*(dn+5))
 	}
 	return p
+}
+
+// finalHold: in the last shrink (to radius 0), our distance to its end point and how far from it we may fight.
+// The tolerance is a third of the disc around the end point still inside the current circle (6 m down to 0.9 m),
+// widened when a visible mech stands on the point (mechs are pushed apart). An infinite tolerance means no hold.
+func (b *Brain) finalHold(o *Obs) (float64, float64) {
+	z := &o.Zone
+	me := &o.Self
+	if z.NextRadius > 0.5 || b.now < z.ShrinkStart-2 || b.now > z.ShrinkEnd || z.ShrinkEnd <= z.ShrinkStart {
+		return 0, math.Inf(1)
+	}
+	cx, cy := z.NextCenter[0], z.NextCenter[1]
+	if b.W.Obst[b.W.vidx(cx, cy)] || b.W.OffMain(cx, cy) {
+		return 0, math.Inf(1) // end point in or on a building: no hold
+	}
+	c := b.curZone(z)
+	tol := clamp((c.R-hyp(c.X-cx, c.Y-cy))/3, 0.9, 6)
+	mine := b.Cfg.Mech.Radius * b.scaleOf(me.Cubes)
+	for _, t := range b.tracks {
+		if b.now-t.Seen > 0.5 {
+			continue
+		}
+		if need := mine + b.Cfg.Mech.Radius*b.scaleOf(t.Cubes) - hyp(t.Pos[0]-cx, t.Pos[1]-cy) + 0.7; need > tol {
+			tol = need
+		}
+	}
+	return hyp(cx-me.Pos[0], cy-me.Pos[1]), tol
 }
 
 func (b *Brain) zoneGoal(z *Zone, x, y float64) (float64, float64) {
@@ -689,7 +731,6 @@ func (b *Brain) step(o *Obs, act *Action) {
 	mode := "idle"
 	var farm *Track
 	var farmPos *Vec3
-	isRegenerating := hpFrac < 0.90 && now-b.lastHurt > 5.0 && len(seen) == 0
 
 	zgx, zgy := b.zoneGoal(z, x, y)
 	zdist := hyp(zgx-x, zgy-y)
@@ -697,6 +738,11 @@ func (b *Brain) step(o *Obs, act *Action) {
 	deadline := b.zoneDeadline(z, x, y, 8)
 	zoneMust := !me.InZone || now+tNeed+3 >= deadline
 	zoneShould := now+tNeed+14 >= deadline
+
+	finalD, finalTol := 0.0, math.Inf(1)
+	if b.pracOn || b.pracSure {
+		finalD, finalTol = b.finalHold(o)
+	}
 
 	escJump := false
 	switch {
@@ -708,6 +754,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 	case b.dodgeShell(o, &mx, &my):
 		boost = me.Energy > 15
 		mode = "dodge"
+	case finalD > finalTol:
+		mx, my = b.travel(me, z.NextCenter[0], z.NextCenter[1])
+		boost = finalD > 4 && me.Energy > 5 && me.Grounded
+		mode = "final"
 	case zoneMust && zdist > 2:
 		mx, my = b.travel(me, zgx, zgy)
 		boost = (!me.InZone || now+tNeed >= deadline) && me.Energy > 5
@@ -813,10 +863,6 @@ func (b *Brain) step(o *Obs, act *Action) {
 			mode = "loot:" + lc.kind
 			switch lc.kind {
 			case "npc":
-				if isRegenerating {
-					mx, my = b.travel(me, zgx, zgy)
-					break
-				}
 				t := b.npcs[lc.id]
 				if t != nil && now-t.Seen < 1 && t.LOS && t.Dist < 75 {
 					farm = t
@@ -825,10 +871,6 @@ func (b *Brain) step(o *Obs, act *Action) {
 					mx, my = b.travel(me, lc.pos[0], lc.pos[1])
 				}
 			case "crate":
-				if isRegenerating {
-					mx, my = b.travel(me, zgx, zgy)
-					break
-				}
 				d := hyp(lc.pos[0]-x, lc.pos[1]-y)
 				cp := Vec3{lc.pos[0], lc.pos[1], lc.pos[2] + b.Cfg.Crates.Height*0.5}
 				if d < 50 && b.W.Clear(Vec3{x, y, zf + st.MuzzleHeight}, cp) {
@@ -984,6 +1026,10 @@ func (b *Brain) step(o *Obs, act *Action) {
 			leadMult := 1.0
 			if isMech && target != nil && target.Lead != nil {
 				leadMult = target.Lead.Multiplier(now)
+			}
+			if isMech && b.pracOn {
+				// friend's 123 recorded matches: gun lead on mechs scaled 0.8 was best
+				leadMult = math.Min(leadMult, 0.8)
 			}
 			gy, gp = b.lead(muzzle, tp, tv, gun.Stats.Speed, grounded, leadMult)
 			gunOK = dist <= gun.Stats.Range*0.96
@@ -1229,7 +1275,7 @@ func (b *Brain) lead(muzzle, tp, tv Vec3, speed float64, grounded bool, mult flo
 	t := 0.0
 	var px, py, pz float64
 	for k := 0; k < 4; k++ {
-		tt := (lat + t) * mult
+		tt := lat + t*mult
 		px, py, pz = tp[0]+tv[0]*tt, tp[1]+tv[1]*tt, tp[2]
 		if !grounded {
 			pz += tv[2] * tt * 0.5
@@ -1731,11 +1777,22 @@ func (b *Brain) chooseLoot(o *Obs, hpFrac float64, danger bool) *lootChoice {
 		}
 		return best
 	}
+	special := false
+	if !b.pracOn && now < seekT {
+		_, hl := hasWeapon(me.Weapons, "laser")
+		_, hn := hasWeapon(me.Weapons, "lightning")
+		special = hl == nil && hn == nil
+	}
 	for _, p := range b.pickups {
 		rad := b.P.LootRadius
 		seek := p.Kind == "laser" && b.P.LaserSeek > rad
 		if seek {
 			rad = b.P.LaserSeek
+		}
+		if special && (p.Kind == "laser" || p.Kind == "lightning") && seekRad > rad {
+			// free-for-all opening: fetch a laser or lightning from further away (friend's recorded matches:
+			// armed by 60 s in 35 % of matches at 90 m against 61-71 % for the best bots)
+			rad, seek = seekRad, true
 		}
 		if b.wantPickup(me, p.Kind) && hyp(p.Pos[0]-x, p.Pos[1]-y) < rad {
 			v := 60.0
@@ -1980,21 +2037,20 @@ func squadParams(p Params) Params {
 	p.LaserRange = 120
 	p.LootRadius = 150
 	p.CrateUntil = 1e9
-	p.Stick = 200
-	p.HPw = 0.18
-	p.LowBonus = 200
+	p.Stick = 120
+	p.HPw = 0.2
+	p.LowBonus = 100
 	p.MaxTarget = 240
 	p.LoseRule = true
-	p.FightLoot = 85
+	p.FightLoot = 70
 	p.FarmHP = 0.5
 
 	p.LaserSeek = 240
 	p.LaserUp = true
 	p.Lethal = true
-	p.Finish = 20
-	p.FinishRush = true
-	p.CubeGoal = 10
-	p.LethalK = 0.75
+	p.Finish = 14
+	p.FinishRush = false
+	p.Pursue = 1.01
 
 	return p
 }
